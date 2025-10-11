@@ -1,5 +1,5 @@
 import { Message, Quiz, Flashcard, Source } from '../types';
-import { supabase } from './supabaseClient';
+import { getSupabase } from './supabaseClient';
 import { v4 as uuidv4 } from 'uuid';
 
 async function handleResponse<T>(response: Response): Promise<T> {
@@ -11,6 +11,8 @@ async function handleResponse<T>(response: Response): Promise<T> {
 }
 
 export const uploadDocument = async (file: File): Promise<{ documentId: string }> => {
+    const supabase = await getSupabase();
+
     // 1. Upload file directly to Supabase Storage to bypass Vercel's 4.5MB limit
     const fileExt = file.name.split('.').pop();
     const filePath = `${uuidv4()}.${fileExt}`;
