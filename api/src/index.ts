@@ -1,7 +1,7 @@
-import express, { RequestHandler } from 'express';
+import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import { handleUpload } from './handlers/uploadHandler';
+import { handleProcess } from './handlers/processHandler';
 import { handleChat } from './handlers/chatHandler';
 import { handleQuiz } from './handlers/quizHandler';
 import { handleFlashcards } from './handlers/flashcardsHandler';
@@ -12,16 +12,15 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 app.use(cors());
-// FIX: The following middleware and handlers are cast to RequestHandler to resolve
-// potential type conflicts and incorrect overload resolution by TypeScript. This can be
-// caused by issues in dependency type definitions.
-app.use(express.json() as RequestHandler);
+// FIX: Removed the explicit 'as RequestHandler' casts which were causing type conflicts.
+// The previous workaround is no longer necessary and was preventing correct type inference.
+app.use(express.json());
 
 // API Routes
-app.post('/api/upload', handleUpload as RequestHandler);
-app.post('/api/chat', handleChat as RequestHandler);
-app.post('/api/quiz', handleQuiz as RequestHandler);
-app.post('/api/flashcards', handleFlashcards as RequestHandler);
+app.post('/api/process', handleProcess);
+app.post('/api/chat', handleChat);
+app.post('/api/quiz', handleQuiz);
+app.post('/api/flashcards', handleFlashcards);
 
 app.listen(port, () => {
     console.log(`Server is running on http://localhost:${port}`);

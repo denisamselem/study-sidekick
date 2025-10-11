@@ -1,4 +1,6 @@
 import { Message, Quiz, Flashcard, Source } from '../types';
+import { supabase } from './supabaseClient';
+import { v4 as uuidv4 } from 'uuid';
 
 async function handleResponse<T>(response: Response): Promise<T> {
     if (!response.ok) {
@@ -9,13 +11,31 @@ async function handleResponse<T>(response: Response): Promise<T> {
 }
 
 export const uploadDocument = async (file: File): Promise<{ documentId: string }> => {
-    const formData = new FormData();
-    formData.append('file', file);
+    // 1. Upload file directly to Supabase Storage to bypass Vercel's 4.5MB limit
+    const fileExt = file.name.split('.').pop();
+    const filePath = `${uuidv4()}.${fileExt}`;
+    
+    const { error: uploadError } = await supabase.storage
+        .from('documents') // The public bucket we created
+        .upload(filePath, file);
 
-    const response = await fetch('/api/upload', {
+    if (uploadError) {
+        console.error("Supabase upload error:", uploadError);
+        throw new Error('Failed to upload file to storage.');
+    }
+
+    // 2. Call our backend to process the file now that it's in storage
+    const response = await fetch('/api/process', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: filePath, mimeType: file.type }),
     });
+
+    // 3. If backend processing fails, try to clean up the orphaned file from storage
+    if (!response.ok) {
+        await supabase.storage.from('documents').remove([filePath]);
+    }
+
     return handleResponse<{ documentId: string }>(response);
 };
 
