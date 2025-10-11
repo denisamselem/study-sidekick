@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { RequestHandler } from 'express';
 import { queryRelevantChunks } from '../services/ragService';
 import { ai } from '../lib/gemini';
 import { Type } from '@google/genai';
@@ -23,7 +23,7 @@ const quizSchema = {
     required: ["title", "questions"]
 };
 
-export async function handleQuiz(req: Request, res: Response) {
+export const handleQuiz: RequestHandler = async (req, res) => {
     const { documentId } = req.body;
 
     if (!documentId) {
@@ -31,8 +31,6 @@ export async function handleQuiz(req: Request, res: Response) {
     }
 
     try {
-        // For a quiz, we retrieve a larger context from the document.
-        // We use a generic query to get a broad selection of chunks.
         const contextChunks = await queryRelevantChunks(documentId, "key concepts and main ideas", 10);
         const contextText = contextChunks.map(c => c.content).join('\n\n---\n\n');
 
@@ -53,11 +51,14 @@ ${contextText}
             },
         });
 
-        const jsonText = response.text.trim();
-        res.status(200).json(JSON.parse(jsonText));
+        const jsonText = response.text;
+        if (!jsonText) {
+            throw new Error('Failed to generate quiz: model response was empty.');
+        }
+        res.status(200).json(JSON.parse(jsonText.trim()));
 
     } catch (error) {
         console.error('Error generating quiz:', error);
         res.status(500).json({ message: 'Failed to generate quiz.' });
     }
-}
+};

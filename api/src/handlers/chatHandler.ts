@@ -1,9 +1,9 @@
-import { Request, Response } from 'express';
+import { RequestHandler } from 'express';
 import { queryRelevantChunks } from '../services/ragService';
 import { ai } from '../lib/gemini';
-import { Message } from '../../../types'; // Assuming types are shared
+import { Message } from '../../../types'; 
 
-export async function handleChat(req: Request, res: Response) {
+export const handleChat: RequestHandler = async (req, res) => {
     const { documentId, history, message } = req.body as { documentId: string; history: Message[]; message: string };
 
     if (!documentId || !message) {
@@ -38,10 +38,15 @@ ${historyText}
             }
         });
 
-        res.status(200).json({ text: response.text, sources: contextChunks });
+        const text = response.text;
+        if (!text) {
+             return res.status(200).json({ text: "I'm sorry, I couldn't generate a response based on the provided context.", sources: contextChunks });
+        }
+
+        res.status(200).json({ text, sources: contextChunks });
 
     } catch (error) {
         console.error('Error in chat handler:', error);
         res.status(500).json({ message: 'Failed to get chat response.' });
     }
-}
+};
