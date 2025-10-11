@@ -1,0 +1,5 @@
+{
+  "name": "Study Sidekick",
+  "description": "An application that acts as a study assistant. Upload your course materials, chat about the content, and generate quizzes or flashcards to test your knowledge. A simplified take on NotebookLM for learning purposes.",
+  "requestFramePermissions": []
+}
