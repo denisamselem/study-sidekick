@@ -1,4 +1,4 @@
-import express from 'express';
+import express = require('express');
 import dotenv from 'dotenv';
 import cors from 'cors';
 import { handleUpload } from './handlers/uploadHandler';
