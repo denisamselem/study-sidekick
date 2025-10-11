@@ -1,4 +1,5 @@
-import express = require('express');
+// FIX: Use ES module import syntax for express to be compatible with ECMAScript modules target.
+import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import { handleUpload } from './handlers/uploadHandler';
