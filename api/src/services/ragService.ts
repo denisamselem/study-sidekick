@@ -1,5 +1,4 @@
 
-
 import { supabase } from '../lib/supabase.js';
 import { createEmbedding } from './embeddingService.js';
 import { v4 as uuidv4 } from 'uuid';
@@ -42,9 +41,12 @@ export async function insertChunks(chunksToInsert: { document_id: string, conten
 export async function queryRelevantChunks(documentId: string, queryText: string, matchCount: number = 5): Promise<{content: string}[]> {
     const queryEmbedding = await createEmbedding(queryText);
 
+    // FIX: Reordered parameters to resolve a PostgreSQL function overload ambiguity.
+    // The database has two `match_documents` functions with the same parameter names
+    // in a different order. This new order should unambiguously match one of them.
     const { data, error } = await supabase.rpc('match_documents', {
-        document_id_filter: documentId,
         query_embedding: queryEmbedding,
+        document_id_filter: documentId,
         match_count: matchCount,
     });
 
