@@ -41,19 +41,25 @@ export async function insertChunks(chunksToInsert: { document_id: string, conten
 export async function queryRelevantChunks(documentId: string, queryText: string, matchCount: number = 5): Promise<{content: string}[]> {
     const queryEmbedding = await createEmbedding(queryText);
 
-    // FIX: Swapped the parameter order in the RPC call to `match_documents`.
-    // The previous order (`query_embedding`, `document_id_filter`) did not resolve
-    // the function overload ambiguity. This new order (`document_id_filter`, 
-    // `query_embedding`) matches the other possible function signature in the
-    // database. This is an attempt to force PostgREST to select one specific
-    // function over the other, resolving the error.
-    const { data, error } = await supabase.rpc('match_documents', {
+    const rpcParams = {
         document_id_filter: documentId,
         query_embedding: queryEmbedding,
         match_count: matchCount,
-    });
+    };
+
+    const { data, error } = await supabase.rpc('match_documents', rpcParams);
 
     if (error) {
+        // Improve error handling to detect the specific database misconfiguration.
+        if ('code' in error && error.code === 'PGRST203') {
+            console.error('FATAL DATABASE ERROR: Ambiguous function call to "match_documents".', error);
+            // Throw a more informative error to guide the developer to the real solution.
+            throw new Error(
+                'A critical database misconfiguration was detected. There are duplicate "match_documents" functions, and the system cannot choose which one to use. ' +
+                'Please resolve this by running the following command in your Supabase SQL Editor: ' +
+                'DROP FUNCTION public.match_documents(query_embedding vector, document_id_filter uuid, match_count integer);'
+            );
+        }
         console.error('Error matching documents:', error);
         throw new Error('Failed to query for relevant chunks.');
     }

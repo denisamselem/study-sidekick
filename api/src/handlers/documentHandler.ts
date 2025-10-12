@@ -117,7 +117,7 @@ export const handleProcessTextDocument: RequestHandler = async (req, res) => {
  */
 // Fix: Explicitly type `req` and `res` to avoid type inference issues with the global `Request` type,
 // which was causing properties like `.protocol` and `.get()` to not be found.
-export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
+export const handleGetDocumentStatus: RequestHandler = async (req: ExpressRequest, res: Response) => {
     const { documentId } = req.params;
     if (!documentId) return res.status(400).json({ message: 'documentId is required.' });
 
