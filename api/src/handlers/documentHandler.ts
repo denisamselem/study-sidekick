@@ -9,6 +9,24 @@ import { createEmbedding } from '../services/embeddingService';
 const pdf = require('pdf-parse');
 
 /**
+ * Builds the necessary headers for internal worker-to-worker fetch requests.
+ * It includes a Vercel-specific bypass token if available, which is crucial
+ * for allowing serverless functions to call each other when deployment protection is enabled.
+ * @returns A HeadersInit object for the fetch request.
+ */
+function getWorkerHeaders(): HeadersInit {
+    const headers: HeadersInit = {
+        'Content-Type': 'application/json',
+    };
+    // The VERCEL_AUTOMATION_BYPASS_SECRET allows a Vercel Function to call an endpoint
+    // on the same deployment, bypassing Deployment Protection.
+    if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
+        headers['x-vercel-protection-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    }
+    return headers;
+}
+
+/**
  * Derives the base URL of the current server from request headers or environment variables.
  * This is crucial for the server to reliably call its own "worker" endpoint.
  * @param req The Express request object.
@@ -157,7 +175,7 @@ export const handleProcessChunk: RequestHandler = async (req, res) => {
             try {
                 const response = await fetch(nextWorkerUrl, {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: getWorkerHeaders(),
                     body: JSON.stringify({ documentId, allChunkIds, currentIndex: nextIndex }),
                 });
                 if (!response.ok) {
@@ -267,7 +285,7 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
                  try {
                      const response = await fetch(workerUrl, {
                          method: 'POST',
-                         headers: { 'Content-Type': 'application/json' },
+                         headers: getWorkerHeaders(),
                          body: JSON.stringify({ documentId, allChunkIds, currentIndex: 0 }),
                      });
                      if (!response.ok) {
