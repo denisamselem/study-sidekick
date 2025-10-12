@@ -1,4 +1,3 @@
-
 import { ai } from '../lib/gemini';
 import { HarmBlockThreshold, HarmCategory, Type } from '@google/genai';
 
@@ -48,7 +47,9 @@ const embeddingSchema = {
  * @param text The text to embed.
  * @returns A promise that resolves to a vector (array of numbers).
  */
-export async function createEmbedding(text: string): Promise<number[]> {
+export async function createEmbedding(text: string, documentId?: string, chunkId?: number): Promise<number[]> {
+    const logPrefix = `[${documentId}] [CHUNK ${chunkId}]`;
+    console.log(`${logPrefix} createEmbedding called for text: "${text.substring(0, 50)}..."`);
     try {
         const prompt = `Generate a semantic vector with ${EMBEDDING_DIMENSION} dimensions for the following text. Each dimension should be an integer between -100 and 100.
 
@@ -75,12 +76,12 @@ TEXT: "${text}"`;
         const vectorInts: number[] = parsed.vector;
 
         if (!vectorInts || !Array.isArray(vectorInts) || vectorInts.length !== EMBEDDING_DIMENSION) {
-             console.error(`Model returned invalid vector shape. Expected ${EMBEDDING_DIMENSION}, got ${vectorInts?.length}.`);
+             console.error(`${logPrefix} Model returned invalid vector shape. Expected ${EMBEDDING_DIMENSION}, got ${vectorInts?.length}. Raw: "${jsonText}"`);
              throw new Error(`Model returned an invalid vector shape.`);
         }
 
         if (vectorInts.some(v => typeof v !== 'number' || isNaN(v))) {
-             console.error(`Model returned non-numeric values. Raw: "${jsonText}"`);
+             console.error(`${logPrefix} Model returned non-numeric values. Raw: "${jsonText}"`);
              throw new Error('Model returned non-numeric values.');
         }
         
@@ -92,11 +93,13 @@ TEXT: "${text}"`;
         if (magnitude === 0) {
              return Array(EMBEDDING_DIMENSION).fill(0);
         }
+
+        console.log(`${logPrefix} Successfully created embedding vector.`);
         return vectorFloats.map(val => val / magnitude);
 
     } catch (error)
     {
-        let errorMessage = `Failed to create embedding for text: "${text.substring(0, 100)}..."`;
+        let errorMessage = `${logPrefix} Failed to create embedding for text: "${text.substring(0, 100)}..."`;
         if (error instanceof Error) {
             errorMessage += `\nError: ${error.message}`;
             // The @google/genai SDK attaches detailed info to the error object.
