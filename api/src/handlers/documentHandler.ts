@@ -8,12 +8,6 @@ import { createEmbedding } from '../services/embeddingService';
 // Use require for pdf-parse to ensure compatibility with CommonJS module format in various environments.
 const pdf = require('pdf-parse');
 
-// The API has a rate limit of 10 RPM. By reducing to a single worker, we can control the flow.
-const MAX_CONCURRENT_WORKERS = 1; 
-
-// A 7-second delay ensures we stay under the 10 RPM limit (1 req / 6s).
-const API_CALL_DELAY_MS = 7000;
-
 /**
  * Builds the necessary headers for internal worker-to-worker fetch requests.
  * It includes a Vercel-specific bypass token if available, which is crucial
@@ -158,43 +152,58 @@ async function _processChunkEmbedding(chunkId: number, documentId: string) {
 
 
 /**
- * A worker that processes a batch of chunks sequentially with a delay between each call.
+ * A resilient, self-triggering worker. It processes one chunk and then triggers the next worker in the chain.
  */
-export const handleProcessBatch: RequestHandler = async (req, res) => {
-    const { documentId, chunkIds } = req.body;
+export const handleProcessChunkAndContinue: RequestHandler = async (req, res) => {
+    const { documentId, chunkIds, index, baseUrl } = req.body;
+    const currentIndex = parseInt(index, 10);
+    const currentChunkId = chunkIds[currentIndex];
 
-    console.log(`[${documentId}] Batch Worker INVOKED for ${chunkIds.length} chunks.`);
+    console.log(`[${documentId}] Worker INVOKED for chunk index ${currentIndex} (ID: ${currentChunkId}).`);
 
-    if (!documentId || !Array.isArray(chunkIds) || chunkIds.length === 0) {
-        console.error(`[${documentId}] Worker received malformed request (missing documentId or chunkIds).`);
-        return res.status(400).json({ message: 'documentId and a non-empty chunkIds array are required.' });
+    if (!documentId || !Array.isArray(chunkIds) || typeof currentIndex !== 'number' || !baseUrl) {
+        console.error(`[${documentId}] Worker received malformed request.`);
+        return res.status(400).json({ message: 'documentId, chunkIds array, index, and baseUrl are required.' });
     }
 
     try {
-        for (const [index, chunkId] of chunkIds.entries()) {
-            await _processChunkEmbedding(chunkId, documentId);
+        await _processChunkEmbedding(currentChunkId, documentId);
 
-            // Add a delay after each call, except for the very last one, to respect API rate limits.
-            if (index < chunkIds.length - 1) {
-                console.log(`[${documentId}] Waiting ${API_CALL_DELAY_MS}ms before next API call to respect rate limits.`);
-                await new Promise(resolve => setTimeout(resolve, API_CALL_DELAY_MS));
-            }
+        const nextIndex = currentIndex + 1;
+        if (nextIndex < chunkIds.length) {
+            const workerUrl = `${baseUrl}/api/document/process-chunk`;
+            console.log(`[${documentId}] Successfully processed index ${currentIndex}. Triggering next worker for index ${nextIndex} at ${workerUrl}.`);
+            
+            // Asynchronously trigger the next worker without waiting for its response.
+            fetch(workerUrl, {
+                method: 'POST',
+                headers: getWorkerHeaders(),
+                body: JSON.stringify({ documentId, chunkIds, index: nextIndex, baseUrl }),
+            }).catch(err => {
+                // This catch is for network errors during the fetch itself.
+                console.error(`[${documentId}] CRITICAL: Failed to trigger next chunk processor for index ${nextIndex}. Error: ${err.message}`);
+            });
+
+        } else {
+            console.log(`[${documentId}] Successfully processed the final chunk (index ${currentIndex}). Chain complete.`);
         }
-        res.status(200).json({ message: `Successfully processed batch of ${chunkIds.length} chunks.` });
+
+        // Immediately respond to the caller, breaking the synchronous chain.
+        res.status(200).json({ message: `Successfully triggered next worker for index ${nextIndex}.` });
+
     } catch (error) {
-        console.error(`[${documentId}] Batch Worker failed while processing chunk. The rest of the batch is aborted.`);
-        // The error is already logged and the failing chunk is marked as FAILED inside _processChunkEmbedding.
-        // Return 500 to indicate that this batch worker invocation failed.
-        res.status(500).json({ message: `Failed to process batch.` });
+        console.error(`[${documentId}] Worker failed to process chunk index ${currentIndex} (ID: ${currentChunkId}). Chain is broken.`);
+        res.status(500).json({ message: `Failed to process chunk.` });
     }
 };
+
 
 /**
  * Orchestrates the document processing.
  * 1. Downloads file from storage.
  * 2. Extracts text and chunks it.
  * 3. Inserts all chunks into DB with a 'PENDING' status.
- * 4. Divides chunks into batches and triggers a parallel worker for EACH batch.
+ * 4. Kicks off the first worker in the self-triggering chain.
  * 5. Returns immediately to the client with a 202 Accepted status.
  */
 export const handleProcessDocument: RequestHandler = async (req, res) => {
@@ -255,55 +264,34 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
         }
         const allChunkIds = insertedChunks.map(c => c.id);
 
-        // 4. Kick off batched workers in parallel (fire-and-forget)
+        // 4. Kick off the first worker in the chain (fire-and-forget)
         if (allChunkIds.length > 0) {
              const baseUrl = getBaseUrl(req);
-             const workerUrl = `${baseUrl}/api/document/process-batch`;
-             
-             // Divide chunk IDs into batches for our workers
-             const numWorkers = Math.min(MAX_CONCURRENT_WORKERS, allChunkIds.length);
-             const batches: number[][] = Array.from({ length: numWorkers }, () => []);
-             allChunkIds.forEach((chunkId, index) => {
-                 batches[index % numWorkers].push(chunkId);
-             });
-
-             console.log(`[${documentId}] All chunks inserted. Triggering ${numWorkers} parallel batch workers at URL: ${workerUrl}`);
+             const workerUrl = `${baseUrl}/api/document/process-chunk`;
+             console.log(`[${documentId}] All chunks inserted. Kicking off processing chain at: ${workerUrl}`);
              
              (async () => {
-                 const triggerPromises = batches.map((batchChunkIds, i) => {
-                     console.log(`[${documentId}] Triggering worker ${i+1} with ${batchChunkIds.length} chunks.`);
-                     return fetch(workerUrl, {
+                 try {
+                     const response = await fetch(workerUrl, {
                          method: 'POST',
                          headers: getWorkerHeaders(),
-                         body: JSON.stringify({ documentId, chunkIds: batchChunkIds }),
-                     }).catch(err => {
-                         console.error(`[${documentId}] Network error triggering worker for batch ${i+1}: ${err.message}`);
-                         return { ok: false, status: 'NETWORK_ERROR', batch: batchChunkIds };
-                     })
-                 });
-
-                 const results = await Promise.allSettled(triggerPromises);
-                 
-                 const failedChunksToMark: number[] = [];
-                 results.forEach((result, i) => {
-                     if (result.status === 'fulfilled') {
-                         const response = result.value as Response | { ok: boolean, status: string, batch: number[] };
-                         if (!response.ok) {
-                             console.error(`[${documentId}] Trigger for batch ${i+1} failed with status: ${response.status}`);
-                             failedChunksToMark.push(...batches[i]);
-                         }
-                     } else {
-                         console.error(`[${documentId}] Trigger for batch ${i+1} failed catastrophically:`, result.reason);
-                         failedChunksToMark.push(...batches[i]);
+                         body: JSON.stringify({ documentId, chunkIds: allChunkIds, index: 0, baseUrl }),
+                     });
+                     if (!response.ok) {
+                         // This is a critical failure if the very first worker can't be triggered.
+                         const errorBody = await response.text();
+                         console.error(`[${documentId}] CRITICAL: Failed to trigger the first worker. Status: ${response.status}. Body: ${errorBody}. Marking all chunks as FAILED.`);
+                         await supabase
+                             .from('documents')
+                             .update({ processing_status: 'FAILED' })
+                             .in('id', allChunkIds);
                      }
-                 });
-
-                 if (failedChunksToMark.length > 0) {
-                     console.error(`[${documentId}] Marking ${failedChunksToMark.length} chunks as FAILED due to trigger failures.`);
-                     await supabase
+                 } catch (err: any) {
+                     console.error(`[${documentId}] CRITICAL: Network error triggering first worker: ${err.message}. Marking all chunks as FAILED.`);
+                      await supabase
                          .from('documents')
                          .update({ processing_status: 'FAILED' })
-                         .in('id', failedChunksToMark);
+                         .in('id', allChunkIds);
                  }
              })();
         }
