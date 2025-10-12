@@ -49,14 +49,79 @@ async function downloadWithRetry(path: string, retries = 3, delay = 500) {
     return await supabase.storage.from('documents').download(path);
 }
 
+/**
+ * A utility function to retry an async operation with exponential backoff.
+ * @param fn The async function to execute.
+ * @param retries The maximum number of retries.
+ * @param delay The initial delay in milliseconds.
+ * @returns The result of the async function.
+ */
+async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
+    let lastError: Error | undefined;
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn();
+        } catch (error: any) {
+            lastError = error;
+            if (i < retries - 1) {
+                const backoffDelay = delay * Math.pow(2, i);
+                console.warn(`Attempt ${i + 1} failed. Retrying in ${backoffDelay}ms...`, error.message);
+                await new Promise(resolve => setTimeout(resolve, backoffDelay));
+            }
+        }
+    }
+    throw lastError;
+}
+
+
+/**
+ * Internal function to generate and store an embedding for a single chunk.
+ * This replaces the logic of the old, separate worker endpoint.
+ * It includes its own error handling to ensure the main loop continues.
+ * @param chunkId The database ID of the chunk to process.
+ * @param documentId The parent document ID, used for logging.
+ */
+async function _processChunkEmbedding(chunkId: number, documentId: string) {
+    try {
+        const { data: chunk, error: fetchError } = await supabase
+            .from('documents')
+            .select('content')
+            .eq('id', chunkId)
+            .single();
+
+        if (fetchError || !chunk) {
+            throw new Error(`[${documentId}] Could not find chunk with ID ${chunkId}: ${fetchError?.message}`);
+        }
+        
+        const embedding = await retry(() => createEmbedding(chunk.content));
+
+        const { error: updateError } = await supabase
+            .from('documents')
+            .update({ embedding: embedding, processing_status: 'COMPLETED' })
+            .eq('id', chunkId);
+        
+        if (updateError) {
+            throw new Error(`[${documentId}] Failed to update chunk ${chunkId} with embedding: ${updateError.message}`);
+        }
+
+        console.log(`[${documentId}] Successfully generated embedding for chunk ${chunkId}`);
+
+    } catch (error) {
+        console.error(`[${documentId}] FATAL: Error processing embedding for chunk ${chunkId}. Marking as FAILED. Error details:`, error);
+        // Mark as failed so the polling can eventually complete.
+        await supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunkId);
+        // We do not re-throw, allowing the main loop to continue processing other chunks.
+    }
+}
+
 
 /**
  * Orchestrates the document processing.
  * 1. Downloads file from storage.
  * 2. Extracts text and chunks it.
- * 3. Inserts all chunks into DB with a 'PENDING' status in manageable batches.
- * 4. Fires off asynchronous, non-blocking requests to the embedding worker for each chunk.
- * 5. Returns immediately to the client.
+ * 3. Inserts all chunks into DB with a 'PENDING' status.
+ * 4. Kicks off a SEQUENTIAL, background process to generate embeddings.
+ * 5. Returns immediately to the client with a 202 Accepted status.
  */
 export const handleProcessDocument: RequestHandler = async (req, res) => {
     const { path, mimeType } = req.body;
@@ -114,23 +179,18 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
             const returnedBatch = await insertChunks(batch);
             insertedChunks.push(...returnedBatch);
         }
-        console.log(`[${documentId}] All chunks inserted.`);
+        console.log(`[${documentId}] All chunks inserted. Starting sequential embedding generation in the background.`);
 
-        // 4. Asynchronously trigger embedding generation for each chunk using the correct database ID
-        const baseUrl = getBaseUrl(req);
-        const workerUrl = `${baseUrl}/api/document/generate-embedding`;
-        console.log(`[${documentId}] Triggering embedding generation at worker URL: ${workerUrl}`);
-        
-        for (const chunk of insertedChunks) {
-             fetch(workerUrl, {
-                 method: 'POST',
-                 headers: { 'Content-Type': 'application/json' },
-                 body: JSON.stringify({ chunkId: chunk.id }),
-             }).catch(err => {
-                 console.error(`[${documentId}] Failed to trigger embedding for chunk ${chunk.id}:`, err);
-                 supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunk.id).then();
-             });
-        }
+        // 4. Asynchronously process embeddings sequentially in the background.
+        // This IIFE is intentionally not awaited. The serverless function will continue
+        // running this process after it has sent the response to the client.
+        (async () => {
+            for (const chunk of insertedChunks) {
+                // Await each chunk individually to process them sequentially
+                await _processChunkEmbedding(chunk.id, documentId);
+            }
+            console.log(`[${documentId}] Background embedding generation complete for all chunks.`);
+        })();
         
         // 5. Clean up the original file from storage
         console.log(`[${documentId}] Cleaning up original file from storage...`);
@@ -147,81 +207,6 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
         res.status(500).json({ message: 'Failed to start file processing. Check server logs for details.' });
     }
 };
-
-/**
- * A utility function to retry an async operation with exponential backoff.
- * @param fn The async function to execute.
- * @param retries The maximum number of retries.
- * @param delay The initial delay in milliseconds.
- * @returns The result of the async function.
- */
-async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
-    let lastError: Error | undefined;
-    for (let i = 0; i < retries; i++) {
-        try {
-            return await fn();
-        } catch (error: any) {
-            lastError = error;
-            if (i < retries - 1) {
-                const backoffDelay = delay * Math.pow(2, i);
-                console.warn(`Attempt ${i + 1} failed. Retrying in ${backoffDelay}ms...`, error.message);
-                await new Promise(resolve => setTimeout(resolve, backoffDelay));
-            }
-        }
-    }
-    throw lastError;
-}
-
-/**
- * Worker endpoint to generate an embedding for a single chunk.
- * This is now robust against malformed requests and guarantees a status update.
- */
-export const handleGenerateEmbedding: RequestHandler = async (req, res) => {
-    // Safely access chunkId to prevent crashes if the body is malformed.
-    const chunkId = (req.body as any)?.chunkId;
-
-    try {
-        if (!chunkId) {
-            console.error('Malformed request to generate-embedding worker. Body was:', JSON.stringify(req.body));
-            return res.status(400).json({ message: 'chunkId is required in the request body.' });
-        }
-
-        const { data: chunk, error: fetchError } = await supabase
-            .from('documents')
-            .select('content')
-            .eq('id', chunkId)
-            .single();
-
-        if (fetchError || !chunk) {
-            throw new Error(`Could not find chunk with ID ${chunkId}: ${fetchError?.message}`);
-        }
-        
-        const embedding = await retry(() => createEmbedding(chunk.content));
-
-        const { error: updateError } = await supabase
-            .from('documents')
-            .update({ embedding: embedding, processing_status: 'COMPLETED' })
-            .eq('id', chunkId);
-        
-        if (updateError) {
-            throw new Error(`Failed to update chunk ${chunkId} with embedding: ${updateError.message}`);
-        }
-
-        res.status(200).json({ success: true });
-
-    } catch (error) {
-        // This catch block now handles everything: malformed requests, retries failing, DB errors.
-        console.error(`FATAL: Error processing embedding for chunk ${chunkId ?? 'unknown'}. Error details:`, error);
-        
-        // This is crucial: if something goes wrong, mark the chunk as FAILED so polling can complete.
-        if (chunkId) {
-            await supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunkId);
-        }
-        
-        res.status(500).json({ message: 'Failed to process embedding after multiple attempts.' });
-    }
-};
-
 
 /**
  * Polling endpoint for the frontend to check document readiness.
