@@ -13,6 +13,7 @@ const App: React.FC = () => {
     const [documentName, setDocumentName] = useState<string | null>(null);
     const [isProcessing, setIsProcessing] = useState<boolean>(false);
     const [processingProgress, setProcessingProgress] = useState(0);
+    const [processingMessage, setProcessingMessage] = useState<string>('Processing Document...');
     const [chatHistory, setChatHistory] = useState<Message[]>([]);
     const [studyAid, setStudyAid] = useState<StudyAid>(null);
     const [currentView, setCurrentView] = useState<ViewType>('chat');
@@ -34,16 +35,17 @@ const App: React.FC = () => {
                 try {
                     const status = await getDocumentStatus(documentId);
                     setProcessingProgress(status.progress);
+                    if (status.message) {
+                        setProcessingMessage(status.message);
+                    }
                     
-                    // Check if the overall processing job has concluded (either success or failure)
                     if (status.isFinished) {
-                        stopPolling(); // Stop polling immediately
-                        setIsProcessing(false); // Hide the processing overlay
+                        stopPolling();
+                        setIsProcessing(false);
 
                         if (status.hasFailed) {
-                            setError("Document processing completed, but some parts failed. Results may be incomplete.");
+                            setError("Document processing failed. Please try uploading again.");
                         }
-                        // Always set progress to 100% when finished to avoid a stuck progress bar
                         setProcessingProgress(100);
                     }
                 } catch (err) {
@@ -67,6 +69,7 @@ const App: React.FC = () => {
         setCurrentView('chat');
         setError(null);
         setProcessingProgress(0);
+        setProcessingMessage('Initializing process...');
         setIsProcessing(true); // Start polling
     }, []);
 
@@ -114,9 +117,9 @@ const App: React.FC = () => {
     };
     
     const renderProcessingOverlay = () => (
-        <div className="absolute inset-0 bg-white/80 dark:bg-slate-900/80 flex flex-col items-center justify-center z-10">
+        <div className="absolute inset-0 bg-white/80 dark:bg-slate-900/80 flex flex-col items-center justify-center z-10 text-center p-4">
             <LoadingSpinner />
-            <h3 className="mt-4 text-lg font-semibold">Processing Document ({processingProgress}%)</h3>
+            <h3 className="mt-4 text-lg font-semibold">{processingMessage} ({processingProgress}%)</h3>
             <p className="text-slate-600 dark:text-slate-400">This may take a few moments. We're preparing your study materials...</p>
         </div>
     );

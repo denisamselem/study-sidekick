@@ -18,9 +18,9 @@ export const processDocument = async (filePath: string, mimeType: string): Promi
     return handleResponse<{ documentId: string }>(response);
 };
 
-export const getDocumentStatus = async (documentId: string): Promise<{ isReady: boolean; isFinished: boolean; hasFailed: boolean; progress: number }> => {
+export const getDocumentStatus = async (documentId: string): Promise<{ isReady: boolean; isFinished: boolean; hasFailed: boolean; progress: number; message?: string }> => {
     const response = await fetch(`/api/document/status/${documentId}`);
-    return handleResponse<{ isReady: boolean; isFinished: boolean; hasFailed: boolean; progress: number }>(response);
+    return handleResponse<{ isReady: boolean; isFinished: boolean; hasFailed: boolean; progress: number; message?: string }>(response);
 };
 
 export const postMessage = async (documentId: string, history: Message[], message: string): Promise<{ text: string, sources: Source[] }> => {

@@ -1,7 +1,8 @@
+
 import express, { Request, Response, NextFunction, RequestHandler } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import { handleProcessDocument, handleGetDocumentStatus, handleProcessChunk } from './handlers/documentHandler';
+import { handleProcessDocument, handleGetDocumentStatus, handleProcessChunk, handleExtractAndChunk } from './handlers/documentHandler';
 import { handleChat } from './handlers/chatHandler';
 import { handleQuiz } from './handlers/quizHandler';
 import { handleFlashcards } from './handlers/flashcardsHandler';
@@ -28,8 +29,9 @@ app.get('/api/config', asyncHandler(handleConfig));
 
 // Asynchronous Document Processing Routes
 app.post('/api/document/process', asyncHandler(handleProcessDocument));
-app.post('/api/document/process-chunk', asyncHandler(handleProcessChunk)); // Worker route for the pull architecture
-app.get('/api/document/status/:documentId', asyncHandler(handleGetDocumentStatus));
+app.post('/api/document/extract-and-chunk', asyncHandler(handleExtractAndChunk)); // Worker for Stage 1
+app.post('/api/document/process-chunk', asyncHandler(handleProcessChunk)); // Worker for Stage 2
+app.get('/api/document/status/:documentId', asyncHandler(handleGetDocumentStatus)); // Controller
 
 // RAG Routes
 app.post('/api/chat', asyncHandler(handleChat));
