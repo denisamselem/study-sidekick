@@ -1,14 +1,14 @@
 // FIX: Using a namespace import for Express to resolve type conflicts with the global Request type.
 // This ensures properties like `headers` and `protocol` are correctly recognized on the Express request object.
 // FIX: Changed import from namespace ('* as express') to default ('express') to resolve type inference issues with the request object.
-import * as express from 'express';
+// FIX: Changed to default express import to resolve type errors on request object properties.
+import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';
 import { insertChunks } from '../services/ragService.js';
 import { createEmbedding } from '../services/embeddingService.js';
-// FIX: Use ES module 'import from' syntax for 'pdf-parse' instead of 'require' to comply with the ECMAScript module target.
-import pdf from 'pdf-parse';
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.js';
 
 const MAX_CONCURRENT_EMBEDDING_WORKERS = 3;
 
@@ -100,9 +100,16 @@ export const handleExtractAndChunk: express.RequestHandler = async (req, res) =>
         const fileBuffer = Buffer.from(await blob.arrayBuffer());
         let text = '';
         if (job.mime_type === 'application/pdf') {
-            // FIX: Cast pdf to any to resolve non-callable type error from module interop issue.
-            const data = await (pdf as any)(fileBuffer);
-            text = data.text;
+            const loadingTask = pdfjsLib.getDocument(fileBuffer.buffer);
+            const doc = await loadingTask.promise;
+            let fullText = '';
+            for (let i = 1; i <= doc.numPages; i++) {
+                const page = await doc.getPage(i);
+                const textContent = await page.getTextContent();
+                const pageText = textContent.items.map((item: any) => item.str).join(' ');
+                fullText += pageText + ' \n';
+            }
+            text = fullText;
         } else {
             text = fileBuffer.toString('utf8');
         }
