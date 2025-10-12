@@ -8,6 +8,8 @@ import { createEmbedding } from '../services/embeddingService';
 // Use require for pdf-parse to ensure compatibility with CommonJS module format in various environments.
 const pdf = require('pdf-parse');
 
+const MAX_CONCURRENT_WORKERS = 5;
+
 /**
  * Builds the necessary headers for internal worker-to-worker fetch requests.
  * It includes a Vercel-specific bypass token if available, which is crucial
@@ -86,8 +88,20 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promis
             return await fn();
         } catch (error: any) {
             lastError = error;
+            // Specific check for 429 (rate limit) errors to use the suggested retry delay.
+            const isRateLimitError = error.status === 429;
+            let backoffDelay = delay * Math.pow(2, i);
+
+            if (isRateLimitError) {
+                // A crude way to find a retry delay in the error message, typical of Google APIs.
+                const retryAfterMatch = JSON.stringify(error).match(/retryDelay":"(\d+)s/);
+                if (retryAfterMatch && retryAfterMatch[1]) {
+                    backoffDelay = parseInt(retryAfterMatch[1], 10) * 1000 + 500; // Add 500ms buffer
+                    console.warn(`Rate limit detected. Respecting API's suggested retry delay of ${backoffDelay}ms.`);
+                }
+            }
+            
             if (i < retries - 1) {
-                const backoffDelay = delay * Math.pow(2, i);
                 console.warn(`Attempt ${i + 1} failed. Retrying in ${backoffDelay}ms...`, error.message);
                 await new Promise(resolve => setTimeout(resolve, backoffDelay));
             }
@@ -138,27 +152,30 @@ async function _processChunkEmbedding(chunkId: number, documentId: string) {
     }
 }
 
-/**
- * A self-contained worker that processes a single chunk. It is triggered in parallel for all chunks of a document.
- */
-export const handleProcessChunk: RequestHandler = async (req, res) => {
-    const { documentId, chunkId } = req.body;
-    
-    console.log(`[${documentId}] Worker INVOKED for chunk ID: ${chunkId}.`);
 
-    if (!documentId || !chunkId) {
-        console.error(`[${documentId}] Worker received malformed request (missing documentId or chunkId).`);
-        return res.status(400).json({ message: 'documentId and chunkId are required.' });
+/**
+ * A worker that processes a batch of chunks sequentially.
+ */
+export const handleProcessBatch: RequestHandler = async (req, res) => {
+    const { documentId, chunkIds } = req.body;
+
+    console.log(`[${documentId}] Batch Worker INVOKED for ${chunkIds.length} chunks.`);
+
+    if (!documentId || !Array.isArray(chunkIds) || chunkIds.length === 0) {
+        console.error(`[${documentId}] Worker received malformed request (missing documentId or chunkIds).`);
+        return res.status(400).json({ message: 'documentId and a non-empty chunkIds array are required.' });
     }
-    
+
     try {
-        await _processChunkEmbedding(chunkId, documentId);
-        res.status(200).json({ message: `Successfully processed chunk ${chunkId}.` });
+        for (const chunkId of chunkIds) {
+            await _processChunkEmbedding(chunkId, documentId);
+        }
+        res.status(200).json({ message: `Successfully processed batch of ${chunkIds.length} chunks.` });
     } catch (error) {
-        console.error(`[${documentId}] Worker failed to process chunk ${chunkId}.`);
-        // The error is already logged and the chunk is marked as FAILED inside _processChunkEmbedding.
-        // Return 500 to indicate that this specific worker invocation failed.
-        res.status(500).json({ message: `Failed to process chunk ${chunkId}.` });
+        console.error(`[${documentId}] Batch Worker failed while processing chunk. The rest of the batch is aborted.`);
+        // The error is already logged and the failing chunk is marked as FAILED inside _processChunkEmbedding.
+        // Return 500 to indicate that this batch worker invocation failed.
+        res.status(500).json({ message: `Failed to process batch.` });
     }
 };
 
@@ -167,7 +184,7 @@ export const handleProcessChunk: RequestHandler = async (req, res) => {
  * 1. Downloads file from storage.
  * 2. Extracts text and chunks it.
  * 3. Inserts all chunks into DB with a 'PENDING' status.
- * 4. Triggers a parallel worker for EACH chunk.
+ * 4. Divides chunks into batches and triggers a parallel worker for EACH batch.
  * 5. Returns immediately to the client with a 202 Accepted status.
  */
 export const handleProcessDocument: RequestHandler = async (req, res) => {
@@ -228,49 +245,48 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
         }
         const allChunkIds = insertedChunks.map(c => c.id);
 
-        // 4. Kick off all workers in parallel (fire-and-forget)
+        // 4. Kick off batched workers in parallel (fire-and-forget)
         if (allChunkIds.length > 0) {
              const baseUrl = getBaseUrl(req);
-             const workerUrl = `${baseUrl}/api/document/process-chunk`;
-             console.log(`[${documentId}] All chunks inserted. Triggering ${allChunkIds.length} parallel workers at URL: ${workerUrl}`);
+             const workerUrl = `${baseUrl}/api/document/process-batch`;
+             
+             // Divide chunk IDs into batches for our workers
+             const numWorkers = Math.min(MAX_CONCURRENT_WORKERS, allChunkIds.length);
+             const batches: number[][] = Array.from({ length: numWorkers }, () => []);
+             allChunkIds.forEach((chunkId, index) => {
+                 batches[index % numWorkers].push(chunkId);
+             });
+
+             console.log(`[${documentId}] All chunks inserted. Triggering ${numWorkers} parallel batch workers at URL: ${workerUrl}`);
              
              (async () => {
-                 const triggerPromises = allChunkIds.map(chunkId => 
-                     fetch(workerUrl, {
+                 const triggerPromises = batches.map((batchChunkIds, i) => {
+                     console.log(`[${documentId}] Triggering worker ${i+1} with ${batchChunkIds.length} chunks.`);
+                     return fetch(workerUrl, {
                          method: 'POST',
                          headers: getWorkerHeaders(),
-                         body: JSON.stringify({ documentId, chunkId }),
+                         body: JSON.stringify({ documentId, chunkIds: batchChunkIds }),
                      }).catch(err => {
-                         // This catch is for network errors during the fetch itself
-                         console.error(`[${documentId}] Network error triggering worker for chunk ${chunkId}: ${err.message}`);
-                         // Return a consistent error-like object for Promise.allSettled
-                         return { ok: false, status: 'NETWORK_ERROR', chunkId };
+                         console.error(`[${documentId}] Network error triggering worker for batch ${i+1}: ${err.message}`);
+                         return { ok: false, status: 'NETWORK_ERROR', batch: batchChunkIds };
                      })
-                 );
+                 });
 
                  const results = await Promise.allSettled(triggerPromises);
                  
-                 let successfulTriggers = 0;
                  const failedChunksToMark: number[] = [];
-
-                 for (const [index, result] of results.entries()) {
-                     const chunkId = allChunkIds[index];
+                 results.forEach((result, i) => {
                      if (result.status === 'fulfilled') {
-                         const response = result.value as Response | { ok: boolean, status: string, chunkId: number };
-                         if (response.ok) {
-                             successfulTriggers++;
-                         } else {
-                             console.error(`[${documentId}] Trigger for chunk ${chunkId} failed with status: ${response.status}`);
-                             failedChunksToMark.push(chunkId);
+                         const response = result.value as Response | { ok: boolean, status: string, batch: number[] };
+                         if (!response.ok) {
+                             console.error(`[${documentId}] Trigger for batch ${i+1} failed with status: ${response.status}`);
+                             failedChunksToMark.push(...batches[i]);
                          }
                      } else {
-                         // This handles rejected promises from the fetch chain (e.g., network errors)
-                         console.error(`[${documentId}] Trigger for chunk ${chunkId} failed catastrophically:`, result.reason);
-                         failedChunksToMark.push(chunkId);
+                         console.error(`[${documentId}] Trigger for batch ${i+1} failed catastrophically:`, result.reason);
+                         failedChunksToMark.push(...batches[i]);
                      }
-                 }
-
-                 console.log(`[${documentId}] Trigger summary: ${successfulTriggers} successful, ${failedChunksToMark.length} failed.`);
+                 });
 
                  if (failedChunksToMark.length > 0) {
                      console.error(`[${documentId}] Marking ${failedChunksToMark.length} chunks as FAILED due to trigger failures.`);

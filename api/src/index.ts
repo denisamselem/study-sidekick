@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction, RequestHandler } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import { handleProcessDocument, handleGetDocumentStatus, handleProcessChunk } from './handlers/documentHandler';
+import { handleProcessDocument, handleGetDocumentStatus, handleProcessBatch } from './handlers/documentHandler';
 import { handleChat } from './handlers/chatHandler';
 import { handleQuiz } from './handlers/quizHandler';
 import { handleFlashcards } from './handlers/flashcardsHandler';
@@ -33,7 +33,7 @@ app.get('/api/config', asyncHandler(handleConfig));
 
 // Asynchronous Document Processing Routes
 app.post('/api/document/process', asyncHandler(handleProcessDocument));
-app.post('/api/document/process-chunk', asyncHandler(handleProcessChunk)); // New worker route
+app.post('/api/document/process-batch', asyncHandler(handleProcessBatch)); // New batch worker route
 app.get('/api/document/status/:documentId', asyncHandler(handleGetDocumentStatus));
 
 // RAG Routes
