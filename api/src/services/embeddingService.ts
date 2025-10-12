@@ -1,5 +1,6 @@
+
 import { ai } from '../lib/gemini';
-import { HarmBlockThreshold, HarmCategory } from '@google/genai';
+import { HarmBlockThreshold, HarmCategory, Type } from '@google/genai';
 
 // We use a smaller dimension that is more suitable for a generative model.
 // This is a balance between semantic richness and generation speed/reliability.
@@ -27,6 +28,18 @@ const safetySettings = [
     },
 ];
 
+const embeddingSchema = {
+    type: Type.OBJECT,
+    properties: {
+        vector: {
+            type: Type.ARRAY,
+            items: { type: Type.INTEGER },
+            description: `A semantic vector of exactly ${EMBEDDING_DIMENSION} integers, each between -100 and 100.`
+        }
+    },
+    required: ["vector"]
+};
+
 
 /**
  * Creates a vector embedding for a given text using a generative model.
@@ -37,10 +50,7 @@ const safetySettings = [
  */
 export async function createEmbedding(text: string): Promise<number[]> {
     try {
-        // OPTIMIZATION: Asking for integers is a simpler task for the model than
-        // generating precise floats, which can significantly reduce generation time.
-        const prompt = `Generate a semantic vector for the text below.
-Respond ONLY with a comma-separated list of exactly ${EMBEDDING_DIMENSION} integers between -100 and 100. Do not include any other text or formatting.
+        const prompt = `Generate a semantic vector with ${EMBEDDING_DIMENSION} dimensions for the following text. Each dimension should be an integer between -100 and 100.
 
 TEXT: "${text}"`;
 
@@ -48,30 +58,29 @@ TEXT: "${text}"`;
             model: 'gemini-2.5-flash',
             contents: prompt,
             config: {
+                responseMimeType: "application/json",
+                responseSchema: embeddingSchema,
                 thinkingConfig: { thinkingBudget: 0 },
-                temperature: 0.0, // Set to 0 for deterministic integer output
-                // FIX: `safetySettings` is a generation configuration and should be placed inside the `config` object.
+                temperature: 0.0,
                 safetySettings,
             },
         });
 
-        const rawText = response.text;
-        if (!rawText) {
+        const jsonText = response.text;
+        if (!jsonText) {
             throw new Error('Model returned an empty response for embedding.');
         }
 
-        const cleanedText = rawText.replace(/```/g, '').trim();
-        const stringNumbers = cleanedText.split(',');
+        const parsed = JSON.parse(jsonText.trim());
+        const vectorInts: number[] = parsed.vector;
 
-        if (stringNumbers.length !== EMBEDDING_DIMENSION) {
-            console.error(`Model returned invalid vector shape. Expected ${EMBEDDING_DIMENSION}, got ${stringNumbers.length}. Raw: "${rawText}"`);
-            throw new Error(`Model returned an invalid vector shape.`);
+        if (!vectorInts || !Array.isArray(vectorInts) || vectorInts.length !== EMBEDDING_DIMENSION) {
+             console.error(`Model returned invalid vector shape. Expected ${EMBEDDING_DIMENSION}, got ${vectorInts?.length}.`);
+             throw new Error(`Model returned an invalid vector shape.`);
         }
 
-        const vectorInts = stringNumbers.map(s => parseInt(s.trim(), 10));
-
-        if (vectorInts.some(isNaN)) {
-             console.error(`Model returned non-numeric values. Raw: "${rawText}"`);
+        if (vectorInts.some(v => typeof v !== 'number' || isNaN(v))) {
+             console.error(`Model returned non-numeric values. Raw: "${jsonText}"`);
              throw new Error('Model returned non-numeric values.');
         }
         
