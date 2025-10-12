@@ -1,7 +1,7 @@
-
 {
   "name": "study-sidekick-backend",
   "version": "1.0.0",
+  "type": "module",
   "description": "Backend for the Study Sidekick RAG application",
   "main": "dist/index.js",
   "scripts": {
