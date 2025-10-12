@@ -1,25 +1,34 @@
+
 import { supabase } from '../lib/supabase';
 import { createEmbedding } from './embeddingService';
 import { v4 as uuidv4 } from 'uuid';
 import { chunkText } from '../lib/textChunker';
 
 /**
- * Inserts a batch of pre-embedded chunks into the database.
- * @param chunksToInsert An array of chunk objects to be inserted.
+ * Inserts a batch of pre-embedded chunks into the database and returns the newly created chunks with their IDs.
+ * @param chunksToInsert An array of chunk objects (without IDs) to be inserted.
+ * @returns A promise that resolves to the array of inserted chunks, including their database-generated IDs.
  */
-export async function insertChunks(chunksToInsert: { id: string, document_id: string, content: string, embedding: number[] | null, processing_status: 'PENDING' | 'COMPLETED' | 'FAILED' }[]) {
+export async function insertChunks(chunksToInsert: { document_id: string, content: string, embedding: number[] | null, processing_status: 'PENDING' | 'COMPLETED' | 'FAILED' }[]): Promise<{ id: number }[]> {
     if (chunksToInsert.length === 0) {
-        return;
+        return [];
     }
     
-    const { error } = await supabase
+    const { data, error } = await supabase
         .from('documents')
-        .insert(chunksToInsert);
+        .insert(chunksToInsert)
+        .select('id');
 
     if (error) {
         console.error(`Error inserting chunk batch:`, error);
         throw new Error('Failed to insert document chunks into vector store.');
     }
+
+    if (!data) {
+        throw new Error('Insert operation failed to return the new document chunks.');
+    }
+
+    return data;
 }
 
 /**
@@ -63,14 +72,19 @@ export async function addDocument(text: string): Promise<string> {
     const embeddings = await Promise.all(embeddingPromises);
 
     const chunksToInsert = chunks.map((content, index) => ({
-        id: uuidv4(),
         document_id: documentId,
         content,
         embedding: embeddings[index],
         processing_status: 'COMPLETED' as const,
     }));
     
-    await insertChunks(chunksToInsert);
+    // We don't need the returned IDs here since this is a one-shot operation
+    const { error } = await supabase.from('documents').insert(chunksToInsert);
+    if (error) {
+        console.error(`Error inserting document:`, error);
+        throw new Error('Failed to insert document into vector store.');
+    }
+
 
     return documentId;
 }

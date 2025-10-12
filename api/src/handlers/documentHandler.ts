@@ -100,28 +100,29 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
         console.log(`[${documentId}] Text chunked into ${chunks.length} pieces.`);
 
         const chunksToInsert = chunks.map(chunkContent => ({
-            id: uuidv4(),
             document_id: documentId,
             content: chunkContent,
             embedding: null,
             processing_status: 'PENDING' as const
         }));
 
-        // 3. Insert all chunks into the database in batches
+        // 3. Insert all chunks into the database in batches and retrieve their generated IDs
         console.log(`[${documentId}] Inserting chunks into database...`);
         const BATCH_SIZE = 100;
+        const insertedChunks = [];
         for (let i = 0; i < chunksToInsert.length; i += BATCH_SIZE) {
             const batch = chunksToInsert.slice(i, i + BATCH_SIZE);
-            await insertChunks(batch);
+            const returnedBatch = await insertChunks(batch);
+            insertedChunks.push(...returnedBatch);
         }
         console.log(`[${documentId}] All chunks inserted.`);
 
-        // 4. Asynchronously trigger embedding generation for each chunk
+        // 4. Asynchronously trigger embedding generation for each chunk using the correct database ID
         const baseUrl = getBaseUrl(req);
         const workerUrl = `${baseUrl}/api/document/generate-embedding`;
         console.log(`[${documentId}] Triggering embedding generation at worker URL: ${workerUrl}`);
         
-        for (const chunk of chunksToInsert) {
+        for (const chunk of insertedChunks) {
              fetch(workerUrl, {
                  method: 'POST',
                  headers: { 'Content-Type': 'application/json' },
