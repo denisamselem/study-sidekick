@@ -69,10 +69,13 @@ export const handleBatch: RequestHandler = async (req, res) => {
         const embeddingPromises = chunkBatch.map(chunk => createEmbedding(chunk));
         const embeddings = await Promise.all(embeddingPromises);
 
+        // FIX: Add missing 'id' and 'processing_status' properties to satisfy the 'insertChunks' function signature.
         const documentsToInsert = chunkBatch.map((chunk, index) => ({
+            id: uuidv4(),
             document_id: job.documentId,
             content: chunk,
             embedding: embeddings[index],
+            processing_status: 'COMPLETED' as const,
         }));
 
         await insertChunks(documentsToInsert);

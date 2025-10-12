@@ -1,20 +1,52 @@
-import React, { useState, useCallback, ReactNode } from 'react';
+import React, { useState, useCallback, ReactNode, useEffect, useRef } from 'react';
 import { FileUpload } from './components/FileUpload';
 import { ChatWindow } from './components/ChatWindow';
 import { QuizView } from './components/QuizView';
 import { FlashcardView } from './components/FlashcardView';
-import { postMessage, fetchQuiz, fetchFlashcards } from './services/apiService';
+import { postMessage, fetchQuiz, fetchFlashcards, getDocumentStatus } from './services/apiService';
 import { Message, StudyAid, ViewType, Quiz, Flashcard } from './types';
 import { ChatIcon, QuizIcon, FlashcardIcon, LoadingSpinner } from './components/common/Icons';
 
 const App: React.FC = () => {
     const [documentId, setDocumentId] = useState<string | null>(null);
     const [documentName, setDocumentName] = useState<string | null>(null);
+    const [isProcessing, setIsProcessing] = useState<boolean>(false);
     const [chatHistory, setChatHistory] = useState<Message[]>([]);
     const [studyAid, setStudyAid] = useState<StudyAid>(null);
     const [currentView, setCurrentView] = useState<ViewType>('chat');
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
+
+    const pollingIntervalRef = useRef<number | null>(null);
+
+    const stopPolling = () => {
+        if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+        }
+    };
+
+    useEffect(() => {
+        if (isProcessing && documentId) {
+            pollingIntervalRef.current = window.setInterval(async () => {
+                try {
+                    const status = await getDocumentStatus(documentId);
+                    if (status.isReady) {
+                        setIsProcessing(false);
+                        stopPolling();
+                    }
+                } catch (err) {
+                    console.error("Polling error:", err);
+                    setError("Failed to get document status. Please try reloading.");
+                    setIsProcessing(false);
+                    stopPolling();
+                }
+            }, 3000);
+        }
+
+        return () => stopPolling();
+    }, [isProcessing, documentId]);
+
 
     const handleFileUpload = useCallback((newDocumentId: string, fileName: string) => {
         setDocumentId(newDocumentId);
@@ -23,6 +55,7 @@ const App: React.FC = () => {
         setStudyAid(null);
         setCurrentView('chat');
         setError(null);
+        setIsProcessing(true); // Start polling
     }, []);
 
     const handleSendMessage = useCallback(async (message: string) => {
@@ -68,6 +101,14 @@ const App: React.FC = () => {
         }
     };
     
+    const renderProcessingOverlay = () => (
+        <div className="absolute inset-0 bg-white/80 dark:bg-slate-900/80 flex flex-col items-center justify-center z-10">
+            <LoadingSpinner />
+            <h3 className="mt-4 text-lg font-semibold">Processing Document</h3>
+            <p className="text-slate-600 dark:text-slate-400">This may take a few moments. We're preparing your study materials...</p>
+        </div>
+    );
+
     const renderContent = (): ReactNode => {
         if (isLoading && (currentView === 'quiz' || currentView === 'flashcards')) {
             return (
@@ -105,6 +146,8 @@ const App: React.FC = () => {
         }
     }
 
+    const isUiDisabled = isLoading || isProcessing;
+
     return (
         <div className="min-h-screen flex flex-col md:flex-row text-slate-800 dark:text-slate-200">
             <aside className="w-full md:w-96 bg-white dark:bg-slate-800 p-6 flex flex-col space-y-6 border-r border-slate-200 dark:border-slate-700">
@@ -113,29 +156,31 @@ const App: React.FC = () => {
                     <p className="text-slate-500 dark:text-slate-400 mt-1">Your AI-powered learning partner.</p>
                 </header>
 
-                <FileUpload onFileUpload={handleFileUpload} setIsLoading={setIsLoading} isLoading={isLoading} />
+                <FileUpload onFileUpload={handleFileUpload} setIsLoading={setIsLoading} isLoading={isLoading || isProcessing} />
 
                 {documentId && (
-                    <div className="flex-grow flex flex-col space-y-4">
+                    <div className={`flex-grow flex flex-col space-y-4 transition-opacity ${isProcessing ? 'opacity-50' : 'opacity-100'}`}>
                         <div className="p-3 bg-slate-100 dark:bg-slate-900/50 rounded-lg">
                            <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Current Document:</p>
                            <p className="text-sm text-indigo-600 dark:text-indigo-400 truncate">{documentName}</p>
                         </div>
                         <h2 className="text-xl font-semibold border-b border-slate-200 dark:border-slate-700 pb-2">Tools</h2>
-                        <nav className="flex flex-col space-y-2">
-                           <button onClick={() => setCurrentView('chat')} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${currentView === 'chat' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'hover:bg-slate-100 dark:hover:bg-slate-700'}`}>
-                                <ChatIcon className="w-6 h-6" />
-                                <span>Chat with Document</span>
-                            </button>
-                            <button onClick={() => handleGenerateStudyAid('quiz')} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${currentView === 'quiz' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'hover:bg-slate-100 dark:hover:bg-slate-700'}`}>
-                                <QuizIcon className="w-6 h-6" />
-                                <span>Generate Quiz</span>
-                            </button>
-                             <button onClick={() => handleGenerateStudyAid('flashcards')} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${currentView === 'flashcards' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'hover:bg-slate-100 dark:hover:bg-slate-700'}`}>
-                                <FlashcardIcon className="w-6 h-6" />
-                                <span>Generate Flashcards</span>
-                            </button>
-                        </nav>
+                        <fieldset disabled={isUiDisabled} className="contents">
+                            <nav className="flex flex-col space-y-2">
+                               <button onClick={() => setCurrentView('chat')} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${currentView === 'chat' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'hover:bg-slate-100 dark:hover:bg-slate-700'}`}>
+                                    <ChatIcon className="w-6 h-6" />
+                                    <span>Chat with Document</span>
+                                </button>
+                                <button onClick={() => handleGenerateStudyAid('quiz')} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${currentView === 'quiz' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'hover:bg-slate-100 dark:hover:bg-slate-700'}`}>
+                                    <QuizIcon className="w-6 h-6" />
+                                    <span>Generate Quiz</span>
+                                </button>
+                                 <button onClick={() => handleGenerateStudyAid('flashcards')} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${currentView === 'flashcards' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'hover:bg-slate-100 dark:hover:bg-slate-700'}`}>
+                                    <FlashcardIcon className="w-6 h-6" />
+                                    <span>Generate Flashcards</span>
+                                </button>
+                            </nav>
+                        </fieldset>
                     </div>
                 )}
             </aside>
@@ -149,7 +194,8 @@ const App: React.FC = () => {
                         </div>
                     </div>
                 ) : (
-                    <div className="h-full">
+                    <div className="h-full relative">
+                        {isProcessing && renderProcessingOverlay()}
                         {renderContent()}
                     </div>
                 )}

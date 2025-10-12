@@ -8,33 +8,19 @@ async function handleResponse<T>(response: Response): Promise<T> {
     return response.json() as Promise<T>;
 }
 
-export const startProcessing = async (filePath: string, mimeType: string): Promise<{ jobId: string, documentId: string, totalChunks: number }> => {
-    const response = await fetch('/api/process/start', {
+export const processDocument = async (filePath: string, mimeType: string): Promise<{ documentId: string }> => {
+    const response = await fetch('/api/document/process', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: filePath, mimeType }),
     });
-    return handleResponse<{ jobId: string, documentId: string, totalChunks: number }>(response);
+    return handleResponse<{ documentId: string }>(response);
 };
 
-export const processBatch = async (jobId: string, startIndex: number, batchSize: number): Promise<{ success: boolean }> => {
-    const response = await fetch('/api/process/batch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId, startIndex, batchSize }),
-    });
-    return handleResponse<{ success: boolean }>(response);
+export const getDocumentStatus = async (documentId: string): Promise<{ isReady: boolean; progress: number }> => {
+    const response = await fetch(`/api/document/status/${documentId}`);
+    return handleResponse<{ isReady: boolean; progress: number }>(response);
 };
-
-export const finishProcessing = async (jobId: string): Promise<{ success: boolean }> => {
-     const response = await fetch('/api/process/finish', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId }),
-    });
-    return handleResponse<{ success: boolean }>(response);
-};
-
 
 export const postMessage = async (documentId: string, history: Message[], message: string): Promise<{ text: string, sources: Source[] }> => {
     const response = await fetch('/api/chat', {

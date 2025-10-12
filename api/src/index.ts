@@ -2,7 +2,7 @@
 import express, { Request, Response, NextFunction, RequestHandler } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import { handleStart, handleBatch, handleFinish } from './handlers/processingHandlers';
+import { handleProcessDocument, handleGenerateEmbedding, handleGetDocumentStatus } from './handlers/documentHandler';
 import { handleChat } from './handlers/chatHandler';
 import { handleQuiz } from './handlers/quizHandler';
 import { handleFlashcards } from './handlers/flashcardsHandler';
@@ -32,10 +32,10 @@ const asyncHandler = (fn: any): any => (
 // API Routes
 app.get('/api/config', asyncHandler(handleConfig));
 
-// Asynchronous Processing Routes
-app.post('/api/process/start', asyncHandler(handleStart));
-app.post('/api/process/batch', asyncHandler(handleBatch));
-app.post('/api/process/finish', asyncHandler(handleFinish));
+// Asynchronous Document Processing Routes
+app.post('/api/document/process', asyncHandler(handleProcessDocument));
+app.post('/api/document/generate-embedding', asyncHandler(handleGenerateEmbedding)); // Internal worker
+app.get('/api/document/status/:documentId', asyncHandler(handleGetDocumentStatus));
 
 // RAG Routes
 app.post('/api/chat', asyncHandler(handleChat));

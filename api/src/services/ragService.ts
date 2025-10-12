@@ -7,7 +7,7 @@ import { chunkText } from '../lib/textChunker';
  * Inserts a batch of pre-embedded chunks into the database.
  * @param chunksToInsert An array of chunk objects to be inserted.
  */
-export async function insertChunks(chunksToInsert: {document_id: string, content: string, embedding: number[]}[]) {
+export async function insertChunks(chunksToInsert: { id: string, document_id: string, content: string, embedding: number[] | null, processing_status: 'PENDING' | 'COMPLETED' | 'FAILED' }[]) {
     const { error } = await supabase
         .from('documents')
         .insert(chunksToInsert);
@@ -41,11 +41,9 @@ export async function queryRelevantChunks(documentId: string, queryText: string,
 
     return data;
 }
-
-// FIX: Implement and export the missing 'addDocument' function to resolve import error in uploadHandler.ts.
+// FIX: Add missing 'addDocument' function.
 /**
- * Processes a whole document: chunks, embeds, and inserts it into the database.
- * This is part of a legacy flow and the new client-driven batch processing is preferred.
+ * Processes a document's text, creates embeddings, and stores it.
  * @param text The text content of the document.
  * @returns The ID of the newly created document.
  */
@@ -53,15 +51,21 @@ export async function addDocument(text: string): Promise<string> {
     const documentId = uuidv4();
     const chunks = chunkText(text);
 
+    if (chunks.length === 0) {
+        return documentId;
+    }
+
     const embeddingPromises = chunks.map(chunk => createEmbedding(chunk));
     const embeddings = await Promise.all(embeddingPromises);
 
-    const chunksToInsert = chunks.map((chunk, index) => ({
+    const chunksToInsert = chunks.map((content, index) => ({
+        id: uuidv4(),
         document_id: documentId,
-        content: chunk,
+        content,
         embedding: embeddings[index],
+        processing_status: 'COMPLETED' as const,
     }));
-
+    
     await insertChunks(chunksToInsert);
 
     return documentId;
