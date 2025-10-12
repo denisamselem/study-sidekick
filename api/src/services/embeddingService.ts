@@ -1,5 +1,3 @@
-
-
 // The instance is a Promise that resolves to the pipeline itself.
 // Use `any` to avoid a top-level import of an ES module, which causes issues in CommonJS.
 let pipelinePromise: Promise<any> | null = null;
@@ -15,8 +13,11 @@ const getPipeline = (): Promise<any> => {
         // Use a dynamic import() which is compatible with CommonJS environments like Vercel's Node.js runtime.
         pipelinePromise = new Promise(async (resolve, reject) => {
             try {
-                // 1. Dynamically import the library
-                const { pipeline } = await import('@xenova/transformers');
+                // HIDE the package name from static analysis by bundlers.
+                // This is a workaround to prevent the Vercel build process from
+                // incorrectly converting this dynamic import() into a require().
+                const transformersPackage = '@xenova/transformers';
+                const { pipeline } = await import(transformersPackage);
 
                 // 2. Initialize the pipeline, which downloads the model on first run.
                 const extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
