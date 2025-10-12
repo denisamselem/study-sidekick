@@ -25,6 +25,9 @@ const asyncHandler = (fn: any): any => (
 };
 
 // Denis was here - trying to trigger a new build on Vercel
+// Denis was here - trying to trigger a new build on Vercel
+// Denis was here - trying to trigger a new build on Vercel
+// Denis was here - trying to trigger a new build on Vercel
 
 // API Routes
 app.get('/api/config', asyncHandler(handleConfig));
