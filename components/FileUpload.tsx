@@ -76,8 +76,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, setIsLoadi
             setError(`Processing failed. ${errorMessage}`);
             setFileName(null);
         } finally {
-            // Let the main app's polling state control the loading indicator from here.
-            // setIsLoading(false); 
+            // FIX: This must be called to reset the initial loading state and hand
+            // control over to the main app's polling state (`isProcessing`).
+            setIsLoading(false); 
         }
     }, [onFileUpload, setIsLoading]);
 
