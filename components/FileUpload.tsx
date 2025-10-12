@@ -5,8 +5,10 @@ import { UploadIcon, LoadingSpinner } from './common/Icons';
 
 // Import pdfjs-dist and set up the worker
 import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
-import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
+
+// Set the worker source directly to the path that is defined in the importmap.
+// This avoids the Vite-specific `?url` import which causes issues with CDN-based import maps.
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist/build/pdf.worker.mjs';
 
 interface FileUploadProps {
     onFileUpload: (documentId: string, fileName: string) => void;
