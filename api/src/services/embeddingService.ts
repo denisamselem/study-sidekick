@@ -1,5 +1,11 @@
 // The instance is a Promise that resolves to the pipeline itself.
 // Use `any` to avoid a top-level import of an ES module, which causes issues in CommonJS.
+import { env } from '@xenova/transformers';
+
+// Configure the cache directory to a writable path in the Vercel environment.
+// This prevents an error when the library tries to cache models on a read-only filesystem.
+env.cacheDir = '/tmp/transformers-cache';
+
 let pipelinePromise: Promise<any> | null = null;
 
 /**
