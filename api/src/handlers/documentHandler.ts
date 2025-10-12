@@ -8,6 +8,10 @@ import { createEmbedding } from '../services/embeddingService';
 // Use require for pdf-parse to ensure compatibility with CommonJS module format in various environments.
 const pdf = require('pdf-parse');
 
+// The maximum number of chunks to process concurrently.
+// A low number is crucial to stay within serverless platform limits on a hobby plan.
+const MAX_CONCURRENT_WORKERS = 3;
+
 /**
  * Builds the necessary headers for internal worker-to-worker fetch requests.
  * It includes a Vercel-specific bypass token if available, which is crucial
@@ -41,8 +45,6 @@ const getBaseUrl = (req: Request): string => {
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
     }
 
-    // FIX: The Express Request type definition is missing the `protocol` property, causing a type error.
-    // Casting to `any` bypasses the erroneous type check, consistent with other workarounds for Express type issues in the project.
     const protocol = (req as any).headers['x-forwarded-proto'] || (req as any).protocol;
     const host = (req as any).get('host');
     if (!host) {
@@ -68,7 +70,6 @@ async function downloadWithRetry(path: string, retries = 3, delay = 500) {
         console.warn(`Attempt ${i + 1} to download ${path} failed. Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
     }
-    // If all retries fail, return the final attempt's result
     return await supabase.storage.from('documents').download(path);
 }
 
@@ -86,15 +87,13 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promis
             return await fn();
         } catch (error: any) {
             lastError = error;
-            // Specific check for 429 (rate limit) errors to use the suggested retry delay.
             const isRateLimitError = error.status === 429;
             let backoffDelay = delay * Math.pow(2, i);
 
             if (isRateLimitError) {
-                // A crude way to find a retry delay in the error message, typical of Google APIs.
                 const retryAfterMatch = JSON.stringify(error).match(/retryDelay":"(\d+)s/);
                 if (retryAfterMatch && retryAfterMatch[1]) {
-                    backoffDelay = parseInt(retryAfterMatch[1], 10) * 1000 + 500; // Add 500ms buffer
+                    backoffDelay = parseInt(retryAfterMatch[1], 10) * 1000 + 500;
                     console.warn(`Rate limit detected. Respecting API's suggested retry delay of ${backoffDelay}ms.`);
                 }
             }
@@ -145,69 +144,52 @@ async function _processChunkEmbedding(chunkId: number, documentId: string) {
     } catch (error) {
         console.error(`[${documentId}] [CHUNK ${chunkId}] FATAL: Error during embedding process. Marking as FAILED. Details:`, error);
         await supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunkId);
-        // Re-throw so the calling worker knows to stop the chain.
         throw error;
     }
 }
 
-
 /**
- * A resilient, self-triggering worker. It processes one chunk and then triggers the next worker in the chain.
+ * A simple, standalone worker that processes a single chunk.
+ * It attempts to "claim" a chunk by atomically updating its status from PENDING to PROCESSING.
+ * This prevents multiple workers from processing the same chunk in a concurrent environment.
  */
-export const handleProcessChunkAndContinue: RequestHandler = async (req, res) => {
-    const { documentId, chunkIds, index, baseUrl } = req.body;
-    const currentIndex = parseInt(index, 10);
-    const currentChunkId = chunkIds[currentIndex];
-
-    console.log(`[${documentId}] Worker INVOKED for chunk index ${currentIndex} (ID: ${currentChunkId}).`);
-
-    if (!documentId || !Array.isArray(chunkIds) || typeof currentIndex !== 'number' || !baseUrl) {
-        console.error(`[${documentId}] Worker received malformed request.`);
-        return res.status(400).json({ message: 'documentId, chunkIds array, index, and baseUrl are required.' });
+export const handleProcessChunk: RequestHandler = async (req, res) => {
+    const { chunkId, documentId } = req.body;
+    if (!chunkId || !documentId) {
+        return res.status(400).json({ message: 'chunkId and documentId are required.' });
     }
 
+    console.log(`[${documentId}] Worker INVOKED for chunk ID: ${chunkId}.`);
+
+    // Atomically claim the chunk. Update status from PENDING to PROCESSING.
+    // The .select() confirms if a row was actually updated.
+    const { data, error: claimError } = await supabase
+        .from('documents')
+        .update({ processing_status: 'PROCESSING' })
+        .eq('id', chunkId)
+        .eq('processing_status', 'PENDING')
+        .select('id');
+    
+    if (claimError || data?.length === 0) {
+        console.log(`[${documentId}] [CHUNK ${chunkId}] Worker could not claim chunk. It was likely already picked up by another worker. Exiting gracefully.`);
+        return res.status(200).json({ message: "Chunk already processed or in progress." });
+    }
+
+    console.log(`[${documentId}] [CHUNK ${chunkId}] Successfully claimed chunk. Starting processing.`);
     try {
-        await _processChunkEmbedding(currentChunkId, documentId);
-
-        const nextIndex = currentIndex + 1;
-        if (nextIndex < chunkIds.length) {
-            const workerUrl = `${baseUrl}/api/document/process-chunk`;
-            console.log(`[${documentId}] Successfully processed index ${currentIndex}. Triggering next worker for index ${nextIndex} at ${workerUrl}.`);
-            
-            // Asynchronously trigger the next worker without waiting for its response.
-            fetch(workerUrl, {
-                method: 'POST',
-                headers: getWorkerHeaders(),
-                body: JSON.stringify({ documentId, chunkIds, index: nextIndex, baseUrl }),
-            }).catch(err => {
-                // This catch is for network errors during the fetch itself.
-                console.error(`[${documentId}] CRITICAL: Failed to trigger next chunk processor for index ${nextIndex}. Error: ${err.message}`);
-            });
-
-        } else {
-            console.log(`[${documentId}] Successfully processed the final chunk (index ${currentIndex}). Chain complete.`);
-        }
-
-        // Add a small delay to ensure the fetch request above is dispatched before the function terminates.
-        await new Promise(resolve => setTimeout(resolve, 100));
-
-        // Immediately respond to the caller, breaking the synchronous chain.
-        res.status(200).json({ message: `Successfully triggered next worker for index ${nextIndex}.` });
-
+        await _processChunkEmbedding(chunkId, documentId);
+        res.status(200).json({ message: `Chunk ${chunkId} processed successfully.` });
     } catch (error) {
-        console.error(`[${documentId}] Worker failed to process chunk index ${currentIndex} (ID: ${currentChunkId}). Chain is broken.`);
-        res.status(500).json({ message: `Failed to process chunk.` });
+        res.status(500).json({ message: `Failed to process chunk ${chunkId}.` });
     }
 };
 
 
 /**
- * Orchestrates the document processing.
- * 1. Downloads file from storage.
- * 2. Extracts text and chunks it.
- * 3. Inserts all chunks into DB with a 'PENDING' status.
- * 4. Kicks off the first worker in the self-triggering chain.
- * 5. Returns immediately to the client with a 202 Accepted status.
+ * Orchestrates the document processing setup.
+ * 1. Downloads file, extracts text, and chunks it.
+ * 2. Inserts all chunks into DB with a 'PENDING' status.
+ * 3. Returns immediately. The frontend polling will kick off the processing.
  */
 export const handleProcessDocument: RequestHandler = async (req, res) => {
     const { path, mimeType } = req.body;
@@ -219,16 +201,13 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
     console.log(`[${documentId}] Starting document processing for path: ${path}`);
 
     try {
-        // 1. Download and parse file, with retries
         console.log(`[${documentId}] Attempting to download file from storage...`);
         const { data: blob, error: downloadError } = await downloadWithRetry(path);
         if (downloadError || !blob) {
             throw new Error(`Could not download file from storage after retries: ${downloadError?.message || 'File blob is null.'}`);
         }
-        console.log(`[${documentId}] File downloaded successfully. Size: ${blob.size} bytes.`);
         
         const fileBuffer = Buffer.from(await blob.arrayBuffer());
-
         console.log(`[${documentId}] Extracting text from mimeType: ${mimeType}`);
         let text = '';
         if (mimeType === 'application/pdf') {
@@ -237,18 +216,14 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
         } else {
             text = fileBuffer.toString('utf8');
         }
-        console.log(`[${documentId}] Text extracted successfully. Length: ${text.length}`);
-
-        // 2. Chunk text and prepare for insertion
+        
         console.log(`[${documentId}] Chunking text...`);
         const chunks = chunkText(text);
         if (chunks.length === 0) {
-            console.log(`[${documentId}] Document is empty or contains no text. Aborting processing.`);
             await supabase.storage.from('documents').remove([path]);
             return res.status(200).json({ documentId });
         }
-        console.log(`[${documentId}] Text chunked into ${chunks.length} pieces.`);
-
+        
         const chunksToInsert = chunks.map(chunkContent => ({
             document_id: documentId,
             content: chunkContent,
@@ -256,67 +231,28 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
             processing_status: 'PENDING' as const
         }));
 
-        // 3. Insert all chunks into the database in batches and retrieve their generated IDs
-        console.log(`[${documentId}] Inserting chunks into database...`);
+        console.log(`[${documentId}] Inserting ${chunksToInsert.length} chunks into database...`);
         const BATCH_SIZE = 100;
-        const insertedChunks = [];
         for (let i = 0; i < chunksToInsert.length; i += BATCH_SIZE) {
             const batch = chunksToInsert.slice(i, i + BATCH_SIZE);
-            const returnedBatch = await insertChunks(batch);
-            insertedChunks.push(...returnedBatch);
+            await insertChunks(batch);
         }
-        const allChunkIds = insertedChunks.map(c => c.id);
 
-        // 4. Kick off the first worker in the chain (fire-and-forget)
-        if (allChunkIds.length > 0) {
-             const baseUrl = getBaseUrl(req);
-             const workerUrl = `${baseUrl}/api/document/process-chunk`;
-             console.log(`[${documentId}] All chunks inserted. Kicking off processing chain at: ${workerUrl}`);
-             
-             (async () => {
-                 try {
-                     const response = await fetch(workerUrl, {
-                         method: 'POST',
-                         headers: getWorkerHeaders(),
-                         body: JSON.stringify({ documentId, chunkIds: allChunkIds, index: 0, baseUrl }),
-                     });
-                     if (!response.ok) {
-                         // This is a critical failure if the very first worker can't be triggered.
-                         const errorBody = await response.text();
-                         console.error(`[${documentId}] CRITICAL: Failed to trigger the first worker. Status: ${response.status}. Body: ${errorBody}. Marking all chunks as FAILED.`);
-                         await supabase
-                             .from('documents')
-                             .update({ processing_status: 'FAILED' })
-                             .in('id', allChunkIds);
-                     }
-                 } catch (err: any) {
-                     console.error(`[${documentId}] CRITICAL: Network error triggering first worker: ${err.message}. Marking all chunks as FAILED.`);
-                      await supabase
-                         .from('documents')
-                         .update({ processing_status: 'FAILED' })
-                         .in('id', allChunkIds);
-                 }
-             })();
-        }
-        
-        // 5. Clean up the original file from storage
-        console.log(`[${documentId}] Cleaning up original file from storage...`);
+        console.log(`[${documentId}] All chunks created in PENDING state. Cleaning up original file.`);
         await supabase.storage.from('documents').remove([path]);
-        console.log(`[${documentId}] Processing job started successfully.`);
-
+        
+        console.log(`[${documentId}] Processing job initialized. Workers will be triggered by polling.`);
         res.status(202).json({ documentId });
 
     } catch (error) {
-        console.error(`[${documentId}] FATAL ERROR during document processing orchestration:`, error);
-        if (error instanceof Error && error.stack) {
-            console.error('Stack trace:', error.stack);
-        }
-        res.status(500).json({ message: 'Failed to start file processing. Check server logs for details.' });
+        console.error(`[${documentId}] FATAL ERROR during document processing setup:`, error);
+        res.status(500).json({ message: 'Failed to start file processing. Check server logs.' });
     }
 };
 
 /**
- * Polling endpoint for the frontend to check document readiness.
+ * Polling endpoint that both reports status and triggers new workers.
+ * This acts as the central controller for the "pull" architecture.
  */
 export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
     const { documentId } = req.params;
@@ -325,41 +261,50 @@ export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
     }
 
     try {
-        const { count: totalCount, error: totalError } = await supabase
-            .from('documents')
-            .select('*', { count: 'exact', head: true })
-            .eq('document_id', documentId);
+        const { data: counts, error: countError } = await supabase
+            .rpc('get_document_processing_status', { doc_id: documentId });
+
+        if (countError) throw new Error(`Database error while fetching counts: ${countError.message}`);
         
-        if (totalError) throw new Error(`Database error while fetching total count: ${totalError.message}`);
+        const { total_chunks, pending_chunks, processing_chunks, completed_chunks, failed_chunks } = counts[0];
+
+        // If there's capacity, trigger new workers for pending chunks.
+        const availableSlots = MAX_CONCURRENT_WORKERS - processing_chunks;
+        if (availableSlots > 0 && pending_chunks > 0) {
+            const { data: chunksToProcess, error: fetchPendingError } = await supabase
+                .from('documents')
+                .select('id')
+                .eq('document_id', documentId)
+                .eq('processing_status', 'PENDING')
+                .limit(availableSlots);
+
+            if (fetchPendingError) throw new Error(`Failed to fetch pending chunks: ${fetchPendingError.message}`);
+
+            if (chunksToProcess && chunksToProcess.length > 0) {
+                console.log(`[${documentId}] Polling controller found ${processing_chunks} active workers and ${pending_chunks} pending chunks. Triggering ${chunksToProcess.length} new workers.`);
+                const baseUrl = getBaseUrl(req);
+                const workerUrl = `${baseUrl}/api/document/process-chunk`;
+                
+                for (const chunk of chunksToProcess) {
+                    // Fire-and-forget: trigger worker but don't wait for its response.
+                    fetch(workerUrl, {
+                        method: 'POST',
+                        headers: getWorkerHeaders(),
+                        body: JSON.stringify({ documentId, chunkId: chunk.id }),
+                    }).catch(err => {
+                        console.error(`[${documentId}] CRITICAL: Controller failed to trigger worker for chunk ${chunk.id}. Error: ${err.message}`);
+                    });
+                }
+            }
+        }
         
-        const { count: completedCount, error: completedError } = await supabase
-            .from('documents')
-            .select('*', { count: 'exact', head: true })
-            .eq('document_id', documentId)
-            .eq('processing_status', 'COMPLETED');
-
-        if (completedError) throw new Error(`Database error while fetching completed count: ${completedError.message}`);
-
-        const { count: failedCount, error: failedError } = await supabase
-            .from('documents')
-            .select('*', { count: 'exact', head: true })
-            .eq('document_id', documentId)
-            .eq('processing_status', 'FAILED');
-
-        if (failedError) throw new Error(`Database error while fetching failed count: ${failedError.message}`);
-
-
-        const total = totalCount ?? 0;
-        const completed = completedCount ?? 0;
-        const failed = failedCount ?? 0;
+        const finishedCount = completed_chunks + failed_chunks;
+        const hasFailed = failed_chunks > 0;
+        const isFinished = total_chunks > 0 && finishedCount === total_chunks;
+        const isReady = isFinished && !hasFailed;
+        const progress = total_chunks > 0 ? (finishedCount / total_chunks) * 100 : (isFinished ? 100 : 0);
         
-        const hasFailed = failed > 0;
-        const isFinished = total > 0 && (completed + failed) === total;
-        const isReady = isFinished && !hasFailed; // Ready only if finished and no failures.
-        const progress = total > 0 ? ((completed + failed) / total) * 100 : 0;
-        
-        // Always log the status check for debugging purposes, but make it concise.
-        console.log(`[Status Check] DocID: ${documentId} | Total: ${total}, Completed: ${completed}, Failed: ${failed}, Progress: ${Math.round(progress)}%`);
+        console.log(`[Status Check] DocID: ${documentId} | Total: ${total_chunks}, Completed: ${completed_chunks}, Processing: ${processing_chunks}, Failed: ${failed_chunks}, Progress: ${Math.round(progress)}%`);
 
         res.status(200).json({ isReady, isFinished, hasFailed, progress: Math.round(progress) }); 
 

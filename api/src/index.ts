@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction, RequestHandler } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import { handleProcessDocument, handleGetDocumentStatus, handleProcessChunkAndContinue } from './handlers/documentHandler';
+import { handleProcessDocument, handleGetDocumentStatus, handleProcessChunk } from './handlers/documentHandler';
 import { handleChat } from './handlers/chatHandler';
 import { handleQuiz } from './handlers/quizHandler';
 import { handleFlashcards } from './handlers/flashcardsHandler';
@@ -13,13 +13,8 @@ const app = express();
 const port = process.env.PORT || 3001;
 
 app.use(cors());
-// FIX: The type definitions for express appear to be conflicting, causing overload resolution to fail.
-// Casting to `any` bypasses the erroneous type check and resolves the error.
 app.use(express.json() as any);
 
-// FIX: The conflicting RequestHandler types cause issues with call signatures and assignability.
-// Using `any` for the function parameter and return type circumvents these type-checking errors,
-// ensuring that async handlers are correctly wrapped and registered.
 const asyncHandler = (fn: any): any => (
   req: Request,
   res: Response,
@@ -33,7 +28,7 @@ app.get('/api/config', asyncHandler(handleConfig));
 
 // Asynchronous Document Processing Routes
 app.post('/api/document/process', asyncHandler(handleProcessDocument));
-app.post('/api/document/process-chunk', asyncHandler(handleProcessChunkAndContinue)); // New worker route for the chain
+app.post('/api/document/process-chunk', asyncHandler(handleProcessChunk)); // Worker route for the pull architecture
 app.get('/api/document/status/:documentId', asyncHandler(handleGetDocumentStatus));
 
 // RAG Routes
