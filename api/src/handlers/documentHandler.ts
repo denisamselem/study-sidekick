@@ -1,7 +1,8 @@
 // FIX: The namespace import `import * as express` was causing type resolution issues.
 // Reverting to named imports is consistent with other handlers and resolves the type errors.
 // FIX: Using a direct import for the Express Request type to resolve type errors.
-import { Request, RequestHandler } from 'express';
+// FIX: The `Request` type from Express is aliased to `ExpressRequest` to prevent conflicts with the global DOM `Request` type.
+import { Request as ExpressRequest, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase';
 import { chunkText } from '../lib/textChunker';
@@ -21,12 +22,13 @@ function getWorkerHeaders(): HeadersInit {
     return headers;
 }
 
-const getBaseUrl = (req: Request): string => {
+// FIX: The `req` parameter is now typed as `ExpressRequest` to use the aliased type from the import, resolving property access errors.
+const getBaseUrl = (req: ExpressRequest): string => {
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
     }
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+    const protocol = req.headers['x-forwarded-proto'] as string || req.protocol;
     const host = req.get('host');
     if (!host) throw new Error("Could not determine host from request headers.");
     return `${protocol}://${host}`;
