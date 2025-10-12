@@ -1,5 +1,6 @@
-// FIX: Import `Request` directly from express to ensure the correct type is used.
-import { Request, RequestHandler } from 'express';
+// FIX: Aliased `Request` to `ExpressRequest` to avoid a name collision with the global `Request`
+// type from the Fetch API. This ensures the correct Express types are used, resolving property access errors.
+import { Request as ExpressRequest, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';
@@ -17,8 +18,8 @@ function getWorkerHeaders(): HeadersInit {
     return headers;
 }
 
-// FIX: Change req type to `Request` from express to resolve property access errors.
-const getBaseUrl = (req: Request): string => {
+// FIX: Changed req type to `ExpressRequest` to use the correctly typed import from express.
+const getBaseUrl = (req: ExpressRequest): string => {
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
