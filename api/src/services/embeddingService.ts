@@ -21,10 +21,11 @@ const getPipeline = (): Promise<any> => {
     if (pipelinePromise === null) {
         console.log('Dynamically importing @xenova/transformers and initializing embedding model...');
         // A dynamic import() is the correct way to load an ES Module from a CommonJS module.
-        // The `if(false)` block above ensures the module is present in the final bundle.
+        // We use string concatenation to "hide" the package name from the Vercel bundler's
+        // static analysis, preventing it from incorrectly converting this to a `require` call.
         pipelinePromise = new Promise(async (resolve, reject) => {
             try {
-                const { pipeline } = await import('@xenova/transformers');
+                const { pipeline } = await import('@xenova/trans' + 'formers');
 
                 // 2. Initialize the pipeline, which downloads the model on first run.
                 const extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
