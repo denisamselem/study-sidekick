@@ -3,9 +3,9 @@ import pdf from 'pdf-parse';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase';
 import { chunkText } from '../lib/textChunker';
-import { createEmbedding } from '../services/embeddingService';
 import { insertChunks } from '../services/ragService';
-import fetch from 'node-fetch';
+// FIX: Import 'createEmbedding' to make it available in this module.
+import { createEmbedding } from '../services/embeddingService';
 
 /**
  * Derives the base URL of the current server from request headers or environment variables.
@@ -14,23 +14,38 @@ import fetch from 'node-fetch';
  * @returns The full base URL (e.g., https://your-app.vercel.app)
  */
 const getBaseUrl = (req: Request): string => {
-    // Prefer an environment variable if set (e.g., on Vercel)
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
-        // Ensure it has a protocol
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
     }
 
-    // Fallback to deriving from request headers
-    // FIX: The type definitions for express appear to be conflicting, causing properties to be missing.
-    // Casting to `any` bypasses the erroneous type check and resolves the error.
     const protocol = (req as any).headers['x-forwarded-proto'] || (req as any).protocol;
     const host = (req as any).get('host');
     if (!host) {
-        // This is a critical failure, we can't build the worker URL.
         throw new Error("Could not determine the host from request headers to build worker URL.");
     }
     return `${protocol}://${host}`;
+}
+
+/**
+ * Attempts to download a file from Supabase storage with retry logic.
+ * This helps mitigate race conditions where the download is attempted before the file is fully available.
+ * @param path The path to the file in the storage bucket.
+ * @param retries The number of times to retry the download.
+ * @param delay The delay in milliseconds between retries.
+ * @returns The downloaded file blob and error status.
+ */
+async function downloadWithRetry(path: string, retries = 3, delay = 500) {
+    for (let i = 0; i < retries; i++) {
+        const { data, error } = await supabase.storage.from('documents').download(path);
+        if (!error && data) {
+            return { data, error: null };
+        }
+        console.warn(`Attempt ${i + 1} to download ${path} failed. Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+    }
+    // If all retries fail, return the final attempt's result
+    return await supabase.storage.from('documents').download(path);
 }
 
 
@@ -51,9 +66,9 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
     const documentId = uuidv4();
 
     try {
-        // 1. Download and parse file
-        const { data: blob, error: downloadError } = await supabase.storage.from('documents').download(path);
-        if (downloadError) throw new Error(`Could not download file from storage: ${downloadError.message}`);
+        // 1. Download and parse file, with retries
+        const { data: blob, error: downloadError } = await downloadWithRetry(path);
+        if (downloadError) throw new Error(`Could not download file from storage after retries: ${downloadError.message}`);
 
         const fileBuffer = Buffer.from(await blob.arrayBuffer());
 
@@ -68,21 +83,20 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
         // 2. Chunk text and prepare for insertion
         const chunks = chunkText(text);
         if (chunks.length === 0) {
-            // If the document is empty, clean up and return.
             await supabase.storage.from('documents').remove([path]);
             return res.status(200).json({ documentId });
         }
 
         const chunksToInsert = chunks.map(chunkContent => ({
-            id: uuidv4(), // Assign a unique ID to each chunk
+            id: uuidv4(),
             document_id: documentId,
             content: chunkContent,
             embedding: null,
             processing_status: 'PENDING' as const
         }));
 
-        // 3. Insert all chunks into the database in batches to avoid payload size limits
-        const BATCH_SIZE = 100; // Process 100 chunks per insert
+        // 3. Insert all chunks into the database in batches
+        const BATCH_SIZE = 100;
         for (let i = 0; i < chunksToInsert.length; i += BATCH_SIZE) {
             const batch = chunksToInsert.slice(i, i + BATCH_SIZE);
             await insertChunks(batch);
@@ -93,13 +107,11 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
         const workerUrl = `${baseUrl}/api/document/generate-embedding`;
         
         for (const chunk of chunksToInsert) {
-             // We don't await this fetch call. This is "fire and forget".
              fetch(workerUrl, {
                  method: 'POST',
                  headers: { 'Content-Type': 'application/json' },
                  body: JSON.stringify({ chunkId: chunk.id }),
              }).catch(err => {
-                 // Log errors, but don't let it stop the process. We will also update the status to FAILED.
                  console.error(`Failed to trigger embedding for chunk ${chunk.id}:`, err);
                  supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunk.id).then();
              });
@@ -108,7 +120,7 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
         // 5. Clean up the original file from storage
         await supabase.storage.from('documents').remove([path]);
 
-        res.status(202).json({ documentId }); // 202 Accepted: The request has been accepted for processing
+        res.status(202).json({ documentId });
 
     } catch (error) {
         console.error('Error starting processing job:', error);
@@ -126,7 +138,6 @@ export const handleGenerateEmbedding: RequestHandler = async (req, res) => {
     }
 
     try {
-        // Get chunk content
         const { data: chunk, error: fetchError } = await supabase
             .from('documents')
             .select('content')
@@ -137,10 +148,8 @@ export const handleGenerateEmbedding: RequestHandler = async (req, res) => {
             throw new Error(`Could not find chunk with ID ${chunkId}: ${fetchError?.message}`);
         }
 
-        // Generate embedding
         const embedding = await createEmbedding(chunk.content);
 
-        // Update the chunk with the new embedding and status
         const { error: updateError } = await supabase
             .from('documents')
             .update({ embedding: embedding, processing_status: 'COMPLETED' })
@@ -154,7 +163,6 @@ export const handleGenerateEmbedding: RequestHandler = async (req, res) => {
 
     } catch (error) {
         console.error(`Error processing embedding for chunk ${chunkId}:`, error);
-        // Update status to FAILED so we know something went wrong
         await supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunkId);
         res.status(500).json({ message: 'Failed to process embedding.' });
     }
@@ -171,31 +179,26 @@ export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
     }
 
     try {
-        const { count, error } = await supabase
-            .from('documents')
-            .select('*', { count: 'exact', head: true })
-            .eq('document_id', documentId)
-            .in('processing_status', ['PENDING']);
-        
-        if (error) {
-            throw new Error(`Database error while fetching status: ${error.message}`);
-        }
-
         const { count: totalCount, error: totalError } = await supabase
             .from('documents')
             .select('*', { count: 'exact', head: true })
             .eq('document_id', documentId);
+        
+        if (totalError) throw new Error(`Database error while fetching total count: ${totalError.message}`);
+        
+        const { count: completedCount, error: completedError } = await supabase
+            .from('documents')
+            .select('*', { count: 'exact', head: true })
+            .eq('document_id', documentId)
+            .eq('processing_status', 'COMPLETED');
 
-        if (totalError) {
-             throw new Error(`Database error while fetching total count: ${totalError.message}`);
-        }
-        
-        const pendingCount = count ?? 0;
+        if (completedError) throw new Error(`Database error while fetching completed count: ${completedError.message}`);
+
         const total = totalCount ?? 0;
-        const processedCount = total - pendingCount;
+        const completed = completedCount ?? 0;
         
-        const isReady = total > 0 && pendingCount === 0;
-        const progress = total > 0 ? (processedCount / total) * 100 : 0;
+        const isReady = total > 0 && completed === total;
+        const progress = total > 0 ? (completed / total) * 100 : 0;
         
         res.status(200).json({ isReady, progress: Math.round(progress) }); 
 
