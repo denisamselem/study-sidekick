@@ -1,7 +1,7 @@
 // FIX: Using a namespace import for Express to resolve type conflicts with the global Request type.
 // This ensures properties like `headers` and `protocol` are correctly recognized on the Express request object.
 // FIX: Changed import from namespace ('* as express') to default ('express') to resolve type inference issues with the request object.
-import express from 'express';
+import * as express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';
@@ -100,7 +100,8 @@ export const handleExtractAndChunk: express.RequestHandler = async (req, res) =>
         const fileBuffer = Buffer.from(await blob.arrayBuffer());
         let text = '';
         if (job.mime_type === 'application/pdf') {
-            const data = await pdf(fileBuffer);
+            // FIX: Cast pdf to any to resolve non-callable type error from module interop issue.
+            const data = await (pdf as any)(fileBuffer);
             text = data.text;
         } else {
             text = fileBuffer.toString('utf8');
