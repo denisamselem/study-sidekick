@@ -1,3 +1,4 @@
+
 import { Message, Quiz, Flashcard, Source } from '../types';
 
 async function handleResponse<T>(response: Response): Promise<T> {
@@ -17,9 +18,9 @@ export const processDocument = async (filePath: string, mimeType: string): Promi
     return handleResponse<{ documentId: string }>(response);
 };
 
-export const getDocumentStatus = async (documentId: string): Promise<{ isReady: boolean; progress: number }> => {
+export const getDocumentStatus = async (documentId: string): Promise<{ isReady: boolean; isFinished: boolean; hasFailed: boolean; progress: number }> => {
     const response = await fetch(`/api/document/status/${documentId}`);
-    return handleResponse<{ isReady: boolean; progress: number }>(response);
+    return handleResponse<{ isReady: boolean; isFinished: boolean; hasFailed: boolean; progress: number }>(response);
 };
 
 export const postMessage = async (documentId: string, history: Message[], message: string): Promise<{ text: string, sources: Source[] }> => {

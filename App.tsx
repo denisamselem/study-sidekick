@@ -34,10 +34,17 @@ const App: React.FC = () => {
                 try {
                     const status = await getDocumentStatus(documentId);
                     setProcessingProgress(status.progress);
-                    if (status.isReady) {
-                        setIsProcessing(false);
+                    
+                    // Check if the overall processing job has concluded (either success or failure)
+                    if (status.isFinished) {
+                        stopPolling(); // Stop polling immediately
+                        setIsProcessing(false); // Hide the processing overlay
+
+                        if (status.hasFailed) {
+                            setError("Document processing completed, but some parts failed. Results may be incomplete.");
+                        }
+                        // Always set progress to 100% when finished to avoid a stuck progress bar
                         setProcessingProgress(100);
-                        stopPolling();
                     }
                 } catch (err) {
                     console.error("Polling error:", err);
@@ -124,7 +131,7 @@ const App: React.FC = () => {
             )
         }
         
-        if (error) {
+        if (error && currentView !== 'chat') { // Show specific error for study aids
              return <div className="text-center p-8 text-red-500">{error}</div>;
         }
 
@@ -168,6 +175,7 @@ const App: React.FC = () => {
                         <div className="p-3 bg-slate-100 dark:bg-slate-900/50 rounded-lg">
                            <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Current Document:</p>
                            <p className="text-sm text-indigo-600 dark:text-indigo-400 truncate">{documentName}</p>
+                           {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
                         </div>
                         <h2 className="text-xl font-semibold border-b border-slate-200 dark:border-slate-700 pb-2">Tools</h2>
                         <fieldset disabled={isUiDisabled} className="contents">

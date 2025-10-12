@@ -1,4 +1,5 @@
 
+
 import { Request, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase';
@@ -215,13 +216,25 @@ export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
 
         if (completedError) throw new Error(`Database error while fetching completed count: ${completedError.message}`);
 
+        const { count: failedCount, error: failedError } = await supabase
+            .from('documents')
+            .select('*', { count: 'exact', head: true })
+            .eq('document_id', documentId)
+            .eq('processing_status', 'FAILED');
+
+        if (failedError) throw new Error(`Database error while fetching failed count: ${failedError.message}`);
+
+
         const total = totalCount ?? 0;
         const completed = completedCount ?? 0;
+        const failed = failedCount ?? 0;
         
-        const isReady = total > 0 && completed === total;
-        const progress = total > 0 ? (completed / total) * 100 : 0;
+        const hasFailed = failed > 0;
+        const isFinished = total > 0 && (completed + failed) === total;
+        const isReady = isFinished && !hasFailed; // Ready only if finished and no failures.
+        const progress = total > 0 ? ((completed + failed) / total) * 100 : 0;
         
-        res.status(200).json({ isReady, progress: Math.round(progress) }); 
+        res.status(200).json({ isReady, isFinished, hasFailed, progress: Math.round(progress) }); 
 
     } catch (error) {
         console.error(`Error getting status for document ${documentId}:`, error);
