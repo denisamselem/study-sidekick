@@ -1,16 +1,41 @@
 
 import React, { useState, useRef, useCallback } from 'react';
-import { processDocument } from '../services/apiService';
-import { getSupabase } from '../services/supabaseClient';
+import { processTextDocument } from '../services/apiService';
 import { UploadIcon, LoadingSpinner } from './common/Icons';
-import { v4 as uuidv4 } from 'uuid';
 
+// Import pdfjs-dist and set up the worker
+import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
+import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
+pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 interface FileUploadProps {
     onFileUpload: (documentId: string, fileName: string) => void;
     setIsLoading: (isLoading: boolean) => void;
     isLoading: boolean;
 }
+
+const extractTextFromFile = async (file: File): Promise<string> => {
+    if (file.type === 'application/pdf') {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+        let fullText = '';
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            fullText += textContent.items.map(item => (item as any).str).join(' ');
+            fullText += '\n\n'; // Add space between pages
+        }
+        return fullText;
+    } else {
+        // For .txt, .md, etc.
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = (error) => reject(error);
+            reader.readAsText(file);
+        });
+    }
+};
 
 export const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, setIsLoading, isLoading }) => {
     const [fileName, setFileName] = useState<string | null>(null);
@@ -26,23 +51,17 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, setIsLoadi
         setFileName(file.name);
 
         try {
-            // 1. Upload file directly to Supabase Storage
-            const supabase = await getSupabase();
-            const fileExt = file.name.split('.').pop();
-            const filePath = `${uuidv4()}.${fileExt}`;
-            
-            const { error: uploadError } = await supabase.storage
-                .from('documents')
-                .upload(filePath, file);
+            // 1. Extract text on the client-side
+            const text = await extractTextFromFile(file);
 
-            if (uploadError) {
-                throw new Error(`Failed to upload file: ${uploadError.message}`);
+            if (!text.trim()) {
+                throw new Error("Could not extract any text from the document.");
             }
 
-            // 2. Start the processing job on the backend. This is now a fire-and-forget operation.
-            const { documentId } = await processDocument(filePath, file.type);
+            // 2. Send extracted text to the backend to start the processing job.
+            const { documentId } = await processTextDocument(text, file.name);
             
-            // 3. Notify parent component to start polling for status
+            // 3. Notify parent component to start polling for embedding status.
             onFileUpload(documentId, file.name);
 
         } catch (err) {
@@ -51,7 +70,8 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, setIsLoadi
             setError(`Processing failed. ${errorMessage}`);
             setFileName(null);
         } finally {
-            setIsLoading(false);
+            // Let the main app's polling state control the loading indicator from here.
+            // setIsLoading(false); 
         }
     }, [onFileUpload, setIsLoading]);
 
@@ -74,10 +94,10 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, setIsLoadi
                 className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-lg flex items-center justify-center transition-colors disabled:bg-indigo-400"
                 disabled={isLoading}
             >
-                {isLoading ? (
+                {isLoading && !fileName ? (
                     <>
                         <LoadingSpinner />
-                        <span>Uploading...</span>
+                        <span>Processing...</span>
                     </>
                 ) : (
                     <>

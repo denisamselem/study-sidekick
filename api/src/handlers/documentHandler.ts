@@ -1,14 +1,11 @@
-// FIX: The previous namespace import for Express (`import * as express from 'express'`) was causing type resolution issues.
-// Switched to a named, aliased import for `Request` to prevent conflicts with global types and ensure
-// properties like `headers` and `protocol` are correctly recognized on the Express Request object.
-import { Request, RequestHandler } from 'express';
+
+
+import express, { RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';
 import { insertChunks } from '../services/ragService.js';
 import { createEmbedding } from '../services/embeddingService.js';
-// FIX: Changed import to explicitly get the default export for pdf-parse to resolve module interoperability issues.
-import { default as pdf } from 'pdf-parse';
 
 const MAX_CONCURRENT_EMBEDDING_WORKERS = 3;
 
@@ -21,8 +18,7 @@ function getWorkerHeaders(): HeadersInit {
     return headers;
 }
 
-// FIX: Corrected the type of `req` to resolve errors where `headers`, `protocol`, and `get` were not found by using the direct `Request` type from express.
-const getBaseUrl = (req: Request): string => {
+const getBaseUrl = (req: express.Request): string => {
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
@@ -33,23 +29,12 @@ const getBaseUrl = (req: Request): string => {
     return `${protocol}://${host}`;
 }
 
-async function downloadWithRetry(path: string, retries = 3, delay = 500) {
-    for (let i = 0; i < retries; i++) {
-        const { data, error } = await supabase.storage.from('documents').download(path);
-        if (!error && data) return { data, error: null };
-        console.warn(`Attempt ${i + 1} to download ${path} failed. Retrying...`);
-        await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
-    }
-    return await supabase.storage.from('documents').download(path);
-}
-
 async function _processChunkEmbedding(chunkId: number, documentId: string) {
     console.log(`[${documentId}] [CHUNK ${chunkId}] Starting embedding process.`);
     try {
         const { data: chunk, error: fetchError } = await supabase.from('documents').select('content').eq('id', chunkId).single();
         if (fetchError || !chunk) throw new Error(`Could not find chunk content: ${fetchError?.message}`);
         
-        // With the local model, this is now a fast and reliable operation. No complex retry logic is needed.
         const embedding = await createEmbedding(chunk.content);
 
         const { error: updateError } = await supabase.from('documents').update({ embedding: embedding, processing_status: 'COMPLETED' }).eq('id', chunkId);
@@ -84,30 +69,29 @@ export const handleProcessChunk: RequestHandler = async (req, res) => {
 };
 
 /**
- * [WORKER - STAGE 1] Downloads file, extracts text, chunks it, and saves chunks to DB.
+ * [INITIATOR] Creates the processing job and all document chunks from pre-extracted text.
  */
-export const handleExtractAndChunk: RequestHandler = async (req, res) => {
-    const { documentId } = req.body;
-    if (!documentId) return res.status(400).json({ message: 'documentId is required.' });
+export const handleProcessTextDocument: RequestHandler = async (req, res) => {
+    const { text, fileName } = req.body;
+    if (!text || !fileName) {
+        return res.status(400).json({ message: 'Text content and fileName are required.' });
+    }
 
+    const documentId = uuidv4();
     try {
-        const { data: job, error: jobError } = await supabase.from('document_jobs').select('storage_path, mime_type').eq('document_id', documentId).single();
-        if (jobError || !job) throw new Error(`Job not found for documentId: ${documentId}`);
+        // 1. Create the main job entry
+        const { error: jobError } = await supabase.from('document_jobs').insert({ 
+            document_id: documentId, 
+            storage_path: fileName, // Use storage_path to store the original file name
+            mime_type: 'text/plain', // Mime-type is now uniform
+            status: 'PENDING_EMBEDDING' 
+        });
+        if (jobError) throw jobError;
 
-        console.log(`[${documentId}] [EXTRACT] Starting extraction for path: ${job.storage_path}`);
-        const { data: blob, error: downloadError } = await downloadWithRetry(job.storage_path);
-        if (downloadError || !blob) throw new Error(`Could not download file: ${downloadError?.message}`);
-        
-        const fileBuffer = Buffer.from(await blob.arrayBuffer());
-        let text = '';
-        if (job.mime_type === 'application/pdf') {
-            const data = await pdf(fileBuffer);
-            text = data.text;
-        } else {
-            text = fileBuffer.toString('utf8');
-        }
-        
+        // 2. Chunk the text
         const chunks = chunkText(text);
+        
+        // 3. Insert all chunks in batches, ready for embedding workers
         if (chunks.length > 0) {
             const chunksToInsert = chunks.map(content => ({ document_id: documentId, content, embedding: null, processing_status: 'PENDING' as const }));
             const BATCH_SIZE = 100;
@@ -116,40 +100,18 @@ export const handleExtractAndChunk: RequestHandler = async (req, res) => {
             }
         }
         
-        await supabase.storage.from('documents').remove([job.storage_path]);
-        await supabase.from('document_jobs').update({ status: 'PENDING_EMBEDDING' }).eq('document_id', documentId);
-        
-        console.log(`[${documentId}] [EXTRACT] Successfully extracted and chunked. Status -> PENDING_EMBEDDING.`);
-        res.status(200).json({ message: 'Extraction and chunking complete.' });
-    } catch (error) {
-        console.error(`[${documentId}] [EXTRACT] FATAL ERROR during extraction. Marking job as FAILED.`, error);
-        await supabase.from('document_jobs').update({ status: 'FAILED' }).eq('document_id', documentId);
-        res.status(500).json({ message: 'Failed to extract text from document.' });
-    }
-};
-
-/**
- * [INITIATOR] Creates the initial processing job. Returns immediately.
- */
-export const handleProcessDocument: RequestHandler = async (req, res) => {
-    const { path, mimeType } = req.body;
-    if (!path || !mimeType) return res.status(400).json({ message: 'File path and mimeType are required.' });
-
-    const documentId = uuidv4();
-    try {
-        const { error } = await supabase.from('document_jobs').insert({ document_id: documentId, storage_path: path, mime_type: mimeType, status: 'PENDING_EXTRACTION' });
-        if (error) throw error;
-        
-        console.log(`[${documentId}] Processing job created for path: ${path}. Polling will trigger workers.`);
+        console.log(`[${documentId}] Processing job created for file: ${fileName}. ${chunks.length} chunks saved. Polling will trigger embedding workers.`);
         res.status(202).json({ documentId });
+
     } catch (error) {
-        console.error(`[${documentId}] FATAL ERROR creating document job:`, error);
+        console.error(`[${documentId}] FATAL ERROR creating document job from text:`, error);
         res.status(500).json({ message: 'Failed to create document processing job.' });
     }
 };
 
+
 /**
- * [CONTROLLER] Polling endpoint that reports status and triggers workers for both stages.
+ * [CONTROLLER] Polling endpoint that reports status and triggers embedding workers.
  */
 export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
     const { documentId } = req.params;
@@ -159,23 +121,13 @@ export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
         const { data: job, error: jobError } = await supabase.from('document_jobs').select('status').eq('document_id', documentId).single();
         if (jobError || !job) return res.status(404).json({ message: 'Document job not found.' });
 
-        const baseUrl = getBaseUrl(req);
+        // The state machine is now simpler. It starts directly at the embedding stage.
+        if (job.status === 'PENDING_EXTRACTION' || job.status === 'EXTRACTING') {
+            // This state is deprecated but we handle it gracefully in case of old jobs.
+            return res.status(200).json({ isReady: false, isFinished: false, hasFailed: false, progress: 0, message: 'Initializing...' });
+        }
 
-        // STAGE 1: TEXT EXTRACTION
-        if (job.status === 'PENDING_EXTRACTION') {
-            const { error: claimError } = await supabase.from('document_jobs').update({ status: 'EXTRACTING' }).eq('document_id', documentId).eq('status', 'PENDING_EXTRACTION');
-            if (!claimError) {
-                console.log(`[${documentId}] [CONTROLLER] Claimed job for extraction, triggering worker.`);
-                fetch(`${baseUrl}/api/document/extract-and-chunk`, {
-                    method: 'POST', headers: getWorkerHeaders(), body: JSON.stringify({ documentId }),
-                }).catch(err => console.error(`[${documentId}] CRITICAL: Controller failed to trigger extraction worker.`, err));
-            }
-            return res.status(200).json({ isReady: false, isFinished: false, hasFailed: false, progress: 0, message: 'Step 1: Extracting Text...' });
-        }
-        
-        if (job.status === 'EXTRACTING') {
-            return res.status(200).json({ isReady: false, isFinished: false, hasFailed: false, progress: 0, message: 'Step 1: Extracting Text...' });
-        }
+        const baseUrl = getBaseUrl(req);
 
         // STAGE 2: EMBEDDING GENERATION
         if (job.status === 'PENDING_EMBEDDING') {
@@ -183,6 +135,11 @@ export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
             if (countError) throw new Error(`DB error fetching chunk counts: ${countError.message}`);
             
             const { total_chunks, pending_chunks, processing_chunks, completed_chunks, failed_chunks } = counts[0];
+
+            if (total_chunks === 0) { // Handle case where document was empty
+                await supabase.from('document_jobs').update({ status: 'COMPLETED' }).eq('document_id', documentId);
+                return res.status(200).json({ isReady: true, isFinished: true, hasFailed: false, progress: 100, message: 'Processing Complete.' });
+            }
 
             const availableSlots = MAX_CONCURRENT_EMBEDDING_WORKERS - processing_chunks;
             if (availableSlots > 0 && pending_chunks > 0) {
@@ -201,8 +158,8 @@ export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
             
             const finishedCount = completed_chunks + failed_chunks;
             const hasFailed = failed_chunks > 0;
-            const progress = total_chunks > 0 ? Math.round((finishedCount / total_chunks) * 100) : 0;
-            const isFinished = total_chunks > 0 && finishedCount === total_chunks;
+            const progress = total_chunks > 0 ? Math.round((finishedCount / total_chunks) * 100) : 100;
+            const isFinished = finishedCount === total_chunks;
 
             if (isFinished) {
                 const finalStatus = hasFailed ? 'FAILED' : 'COMPLETED';
@@ -210,7 +167,7 @@ export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
                 return res.status(200).json({ isReady: !hasFailed, isFinished: true, hasFailed, progress: 100, message: `Processing ${finalStatus}.` });
             }
             
-            return res.status(200).json({ isReady: false, isFinished: false, hasFailed, progress, message: 'Step 2: Generating Embeddings...' }); 
+            return res.status(200).json({ isReady: false, isFinished: false, hasFailed, progress, message: 'Generating Embeddings...' }); 
         }
 
         // FINAL STATES

@@ -9,11 +9,11 @@ async function handleResponse<T>(response: Response): Promise<T> {
     return response.json() as Promise<T>;
 }
 
-export const processDocument = async (filePath: string, mimeType: string): Promise<{ documentId: string }> => {
-    const response = await fetch('/api/document/process', {
+export const processTextDocument = async (text: string, fileName: string): Promise<{ documentId: string }> => {
+    const response = await fetch('/api/document/process-text', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: filePath, mimeType }),
+        body: JSON.stringify({ text, fileName }),
     });
     return handleResponse<{ documentId: string }>(response);
 };
