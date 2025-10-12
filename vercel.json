@@ -1,5 +1,10 @@
 {
   "version": 2,
+  "functions": {
+    "api/src/index.ts": {
+      "includeFiles": "api/node_modules/@xenova/transformers/**"
+    }
+  },
   "builds": [
     {
       "src": "package.json",
