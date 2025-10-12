@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useCallback } from 'react';
 import { processDocument } from '../services/apiService';
 import { getSupabase } from '../services/supabaseClient';
@@ -65,7 +66,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, setIsLoadi
                 ref={fileInputRef}
                 onChange={handleFileChange}
                 className="hidden"
-                accept=".txt, .md"
+                accept=".pdf, .txt, .md"
                 disabled={isLoading}
             />
             <button

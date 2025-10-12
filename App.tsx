@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, ReactNode, useEffect, useRef } from 'react';
 import { FileUpload } from './components/FileUpload';
 import { ChatWindow } from './components/ChatWindow';
@@ -194,7 +195,7 @@ const App: React.FC = () => {
                     <div className="flex items-center justify-center h-full bg-white dark:bg-slate-800 rounded-lg shadow-inner">
                         <div className="text-center text-slate-500 dark:text-slate-400">
                             <h2 className="text-2xl font-semibold">Welcome to Study Sidekick</h2>
-                            <p className="mt-2">Upload your study material (.txt or .md) to get started.</p>
+                            <p className="mt-2">Upload your study material (.pdf, .txt, or .md) to get started.</p>
                         </div>
                     </div>
                 ) : (

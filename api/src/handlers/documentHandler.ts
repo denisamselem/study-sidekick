@@ -1,9 +1,13 @@
+
 import { Request, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase';
 import { chunkText } from '../lib/textChunker';
 import { insertChunks } from '../services/ragService';
 import { createEmbedding } from '../services/embeddingService';
+
+// Use require for pdf-parse to ensure compatibility with CommonJS module format in various environments.
+const pdf = require('pdf-parse');
 
 /**
  * Derives the base URL of the current server from request headers or environment variables.
@@ -62,29 +66,38 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
     }
 
     const documentId = uuidv4();
+    console.log(`[${documentId}] Starting document processing for path: ${path}`);
 
     try {
         // 1. Download and parse file, with retries
+        console.log(`[${documentId}] Attempting to download file from storage...`);
         const { data: blob, error: downloadError } = await downloadWithRetry(path);
         if (downloadError || !blob) {
             throw new Error(`Could not download file from storage after retries: ${downloadError?.message || 'File blob is null.'}`);
         }
-
+        console.log(`[${documentId}] File downloaded successfully. Size: ${blob.size} bytes.`);
+        
         const fileBuffer = Buffer.from(await blob.arrayBuffer());
 
+        console.log(`[${documentId}] Extracting text from mimeType: ${mimeType}`);
         let text = '';
         if (mimeType === 'application/pdf') {
-            throw new Error('PDF processing is not supported due to library instability.');
+            const data = await pdf(fileBuffer);
+            text = data.text;
         } else {
             text = fileBuffer.toString('utf8');
         }
+        console.log(`[${documentId}] Text extracted successfully. Length: ${text.length}`);
 
         // 2. Chunk text and prepare for insertion
+        console.log(`[${documentId}] Chunking text...`);
         const chunks = chunkText(text);
         if (chunks.length === 0) {
+            console.log(`[${documentId}] Document is empty or contains no text. Aborting processing.`);
             await supabase.storage.from('documents').remove([path]);
             return res.status(200).json({ documentId });
         }
+        console.log(`[${documentId}] Text chunked into ${chunks.length} pieces.`);
 
         const chunksToInsert = chunks.map(chunkContent => ({
             id: uuidv4(),
@@ -95,15 +108,18 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
         }));
 
         // 3. Insert all chunks into the database in batches
+        console.log(`[${documentId}] Inserting chunks into database...`);
         const BATCH_SIZE = 100;
         for (let i = 0; i < chunksToInsert.length; i += BATCH_SIZE) {
             const batch = chunksToInsert.slice(i, i + BATCH_SIZE);
             await insertChunks(batch);
         }
+        console.log(`[${documentId}] All chunks inserted.`);
 
         // 4. Asynchronously trigger embedding generation for each chunk
         const baseUrl = getBaseUrl(req);
         const workerUrl = `${baseUrl}/api/document/generate-embedding`;
+        console.log(`[${documentId}] Triggering embedding generation at worker URL: ${workerUrl}`);
         
         for (const chunk of chunksToInsert) {
              fetch(workerUrl, {
@@ -111,19 +127,24 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
                  headers: { 'Content-Type': 'application/json' },
                  body: JSON.stringify({ chunkId: chunk.id }),
              }).catch(err => {
-                 console.error(`Failed to trigger embedding for chunk ${chunk.id}:`, err);
+                 console.error(`[${documentId}] Failed to trigger embedding for chunk ${chunk.id}:`, err);
                  supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunk.id).then();
              });
         }
         
         // 5. Clean up the original file from storage
+        console.log(`[${documentId}] Cleaning up original file from storage...`);
         await supabase.storage.from('documents').remove([path]);
+        console.log(`[${documentId}] Processing job started successfully.`);
 
         res.status(202).json({ documentId });
 
     } catch (error) {
-        console.error('Error starting processing job:', error);
-        res.status(500).json({ message: 'Failed to start file processing.' });
+        console.error(`[${documentId}] FATAL ERROR during document processing:`, error);
+        if (error instanceof Error && error.stack) {
+            console.error('Stack trace:', error.stack);
+        }
+        res.status(500).json({ message: 'Failed to start file processing. Check server logs for details.' });
     }
 };
 
