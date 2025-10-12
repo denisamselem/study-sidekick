@@ -1,132 +1,47 @@
-import { ai } from '../lib/gemini';
-import { HarmBlockThreshold, HarmCategory, Type } from '@google/genai';
 
-// We use a smaller dimension that is more suitable for a generative model.
-// This is a balance between semantic richness and generation speed/reliability.
-const EMBEDDING_DIMENSION = 128;
-
-// By disabling all safety checks for this specific internal task, we can reduce
-// API overhead and latency. This is acceptable as we are processing the user's
-// own content for vectorization, not generating public-facing content.
-const safetySettings = [
-    {
-        category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-        threshold: HarmBlockThreshold.BLOCK_NONE,
-    },
-    {
-        category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-        threshold: HarmBlockThreshold.BLOCK_NONE,
-    },
-    {
-        category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-        threshold: HarmBlockThreshold.BLOCK_NONE,
-    },
-    {
-        category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-        threshold: HarmBlockThreshold.BLOCK_NONE,
-    },
-];
-
-const embeddingSchema = {
-    type: Type.OBJECT,
-    properties: {
-        vector: {
-            type: Type.ARRAY,
-            items: { type: Type.INTEGER },
-            description: `A semantic vector of exactly ${EMBEDDING_DIMENSION} integers, each between -100 and 100.`
-        }
-    },
-    required: ["vector"]
-};
-
+import { pipeline, Pipeline } from '@xenova/transformers';
 
 /**
- * Creates a vector embedding for a given text using a generative model.
- * This is a workaround since a dedicated embedding model is not available.
- * It prompts the model to generate a semantic vector and parses the result.
+ * A singleton class to manage the text embedding pipeline.
+ * This ensures that the AI model is loaded only once per server instance,
+ * saving memory and initialization time on subsequent requests.
+ */
+class EmbeddingPipeline {
+    static task = 'feature-extraction';
+    static model = 'Xenova/all-MiniLM-L6-v2';
+    static instance: Promise<Pipeline> | null = null;
+
+    static async getInstance() {
+        if (this.instance === null) {
+            // The pipeline function will download and cache the model on the first run.
+            console.log('Initializing embedding model for the first time...');
+            this.instance = pipeline(this.task, this.model);
+        }
+        return this.instance;
+    }
+}
+
+/**
+ * Creates a vector embedding for a given text using a local, open-source model.
+ * This is significantly faster and more reliable than using a remote generative API.
  * @param text The text to embed.
  * @returns A promise that resolves to a vector (array of numbers).
  */
-export async function createEmbedding(text: string, documentId?: string, chunkId?: number): Promise<number[]> {
-    const logPrefix = `[${documentId}] [CHUNK ${chunkId}]`;
-    console.log(`${logPrefix} createEmbedding called for text: "${text.substring(0, 50)}..."`);
+export async function createEmbedding(text: string): Promise<number[]> {
     try {
-        const prompt = `Generate a semantic vector with ${EMBEDDING_DIMENSION} dimensions for the following text. Each dimension should be an integer between -100 and 100.
+        const extractor = await EmbeddingPipeline.getInstance();
 
-TEXT: "${text}"`;
-        
-        console.log(`${logPrefix} Awaiting response from Gemini API...`);
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: embeddingSchema,
-                thinkingConfig: { thinkingBudget: 0 },
-                temperature: 0.0,
-                safetySettings,
-            },
+        // Compute the embedding. The model runs locally, processing the text in milliseconds.
+        const output = await extractor(text, {
+            pooling: 'mean',
+            normalize: true,
         });
-        console.log(`${logPrefix} Gemini API response received.`);
 
-        const jsonText = response.text;
-        if (!jsonText) {
-            throw new Error('Model returned an empty response for embedding.');
-        }
-        console.log(`${logPrefix} Response text obtained. Parsing JSON.`);
-
-        const parsed = JSON.parse(jsonText.trim());
-        let vectorInts: number[] = parsed.vector || [];
-
-        // FIX: Pad or truncate the vector to handle model inaccuracies.
-        if (vectorInts.length < EMBEDDING_DIMENSION) {
-            console.warn(`${logPrefix} Vector is too short (${vectorInts.length}). Padding with zeros to reach ${EMBEDDING_DIMENSION}.`);
-            const padding = Array(EMBEDDING_DIMENSION - vectorInts.length).fill(0);
-            vectorInts.push(...padding);
-        } else if (vectorInts.length > EMBEDDING_DIMENSION) {
-            console.warn(`${logPrefix} Vector is too long (${vectorInts.length}). Truncating to ${EMBEDDING_DIMENSION}.`);
-            vectorInts = vectorInts.slice(0, EMBEDDING_DIMENSION);
-        }
-        
-        // This check now serves as a final safeguard against completely malformed (e.g., non-array) responses.
-        if (!Array.isArray(vectorInts) || vectorInts.length !== EMBEDDING_DIMENSION) {
-             console.error(`${logPrefix} Model returned a malformed vector that could not be corrected. Raw: "${jsonText}"`);
-             throw new Error(`Model returned a malformed vector that could not be corrected.`);
-        }
-
-        if (vectorInts.some(v => typeof v !== 'number' || isNaN(v))) {
-             console.error(`${logPrefix} Model returned non-numeric values. Raw: "${jsonText}"`);
-             throw new Error('Model returned non-numeric values.');
-        }
-        console.log(`${logPrefix} JSON parsed and vector validated/corrected.`);
-        
-        // Convert integers [-100, 100] to floats [-1.0, 1.0]
-        const vectorFloats = vectorInts.map(i => i / 100.0);
-
-        // Normalize the vector (essential for accurate cosine similarity search)
-        const magnitude = Math.sqrt(vectorFloats.reduce((sum, val) => sum + val * val, 0));
-        if (magnitude === 0) {
-             return Array(EMBEDDING_DIMENSION).fill(0);
-        }
-
-        console.log(`${logPrefix} Successfully created and normalized embedding vector.`);
-        return vectorFloats.map(val => val / magnitude);
-
-    } catch (error)
-    {
-        let errorMessage = `${logPrefix} Failed to create embedding for text: "${text.substring(0, 100)}..."`;
-        if (error instanceof Error) {
-            errorMessage += `\nError: ${error.message}`;
-            // The @google/genai SDK attaches detailed info to the error object.
-            // Stringifying it captures everything for debugging (e.g., rate limit details).
-            errorMessage += `\nDetails: ${JSON.stringify(error, null, 2)}`;
-            if (error.stack) {
-                errorMessage += `\nStack: ${error.stack}`;
-            }
-        } else {
-            errorMessage += `\nCaught non-Error object: ${JSON.stringify(error, null, 2)}`;
-        }
-        console.error(errorMessage);
+        // Convert the tensor data to a standard JavaScript array.
+        return Array.from(output.data);
+    } catch (error) {
+        console.error(`Failed to create embedding for text: "${text.substring(0, 100)}..."`, error);
+        // Re-throw the error to be handled by the calling function (e.g., to mark a chunk as FAILED).
         throw error;
     }
 }

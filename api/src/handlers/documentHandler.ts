@@ -1,5 +1,6 @@
 
 
+
 // FIX: Alias the `Request` type from express to avoid a name collision with the global DOM `Request` type.
 import { Request as ExpressRequest, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
@@ -9,13 +10,6 @@ import { insertChunks } from '../services/ragService';
 import { createEmbedding } from '../services/embeddingService';
 
 const pdf = require('pdf-parse');
-
-class RateLimitCoolDownError extends Error {
-    constructor(message: string) {
-        super(message);
-        this.name = 'RateLimitCoolDownError';
-    }
-}
 
 const MAX_CONCURRENT_EMBEDDING_WORKERS = 3;
 
@@ -50,61 +44,20 @@ async function downloadWithRetry(path: string, retries = 3, delay = 500) {
     return await supabase.storage.from('documents').download(path);
 }
 
-async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
-    let lastError: Error | undefined;
-    for (let i = 0; i < retries; i++) {
-        try {
-            return await fn();
-        } catch (error: any) {
-            lastError = error;
-            const isRateLimitError = error.status === 429 && error.message;
-            let backoffDelay = delay * Math.pow(2, i);
-
-            if (isRateLimitError) {
-                const retryAfterMatchS = error.message.match(/Please retry in ([\d.]+)s/);
-                const retryAfterMatchMs = error.message.match(/Please retry in ([\d.]+)ms/);
-                let apiWaitTime: number | null = null;
-                if (retryAfterMatchS?.[1]) apiWaitTime = parseFloat(retryAfterMatchS[1]) * 1000;
-                else if (retryAfterMatchMs?.[1]) apiWaitTime = parseFloat(retryAfterMatchMs[1]);
-                
-                if (apiWaitTime !== null) {
-                    backoffDelay = apiWaitTime + 500;
-                    console.warn(`Rate limit detected. API suggests retry delay of ~${Math.round(apiWaitTime)}ms.`);
-                }
-                
-                if (backoffDelay > 5000) {
-                     console.warn(`Required cooldown (${Math.round(backoffDelay)}ms) is too long. Re-queueing chunk.`);
-                     throw new RateLimitCoolDownError(`Cooldown of ${Math.round(backoffDelay)}ms required.`);
-                }
-            }
-            
-            if (i < retries - 1) {
-                console.warn(`Attempt ${i + 1} failed. Retrying in ${Math.round(backoffDelay)}ms...`);
-                await new Promise(resolve => setTimeout(resolve, backoffDelay));
-            }
-        }
-    }
-    throw lastError;
-}
-
 async function _processChunkEmbedding(chunkId: number, documentId: string) {
     console.log(`[${documentId}] [CHUNK ${chunkId}] Starting embedding process.`);
     try {
         const { data: chunk, error: fetchError } = await supabase.from('documents').select('content').eq('id', chunkId).single();
         if (fetchError || !chunk) throw new Error(`Could not find chunk content: ${fetchError?.message}`);
         
-        const embedding = await retry(() => createEmbedding(chunk.content, documentId, chunkId));
+        // With the local model, this is now a fast and reliable operation. No complex retry logic is needed.
+        const embedding = await createEmbedding(chunk.content);
 
         const { error: updateError } = await supabase.from('documents').update({ embedding: embedding, processing_status: 'COMPLETED' }).eq('id', chunkId);
         if (updateError) throw new Error(`Failed to update with embedding: ${updateError.message}`);
 
         console.log(`[${documentId}] [CHUNK ${chunkId}] Successfully processed and saved embedding.`);
     } catch (error) {
-        if (error instanceof RateLimitCoolDownError) {
-            console.log(`[${documentId}] [CHUNK ${chunkId}] Re-queueing chunk due to rate limit. Status -> PENDING.`);
-            await supabase.from('documents').update({ processing_status: 'PENDING' }).eq('id', chunkId);
-            return; 
-        }
         console.error(`[${documentId}] [CHUNK ${chunkId}] FATAL: Error during embedding. Marking as FAILED.`, error);
         await supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunkId);
         throw error;
@@ -125,7 +78,7 @@ export const handleProcessChunk: RequestHandler = async (req, res) => {
     console.log(`[${documentId}] [CHUNK ${chunkId}] Claimed chunk. Starting processing.`);
     try {
         await _processChunkEmbedding(chunkId, documentId);
-        res.status(200).json({ message: `Chunk ${chunkId} processed or re-queued successfully.` });
+        res.status(200).json({ message: `Chunk ${chunkId} processed successfully.` });
     } catch (error) {
         res.status(500).json({ message: `Failed to process chunk ${chunkId}.` });
     }
