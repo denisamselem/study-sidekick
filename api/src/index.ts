@@ -24,6 +24,8 @@ const asyncHandler = (fn: any): any => (
   Promise.resolve(fn(req, res, next)).catch(next);
 };
 
+// Denis was here - trying to trigger a new build on Vercel
+
 // API Routes
 app.get('/api/config', asyncHandler(handleConfig));
 
