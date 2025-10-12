@@ -20,6 +20,8 @@ const getBaseUrl = (req: Request): string => {
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
     }
 
+    // FIX: The Express Request type definition is missing the `protocol` property, causing a type error.
+    // Casting to `any` bypasses the erroneous type check, consistent with other workarounds for Express type issues in the project.
     const protocol = (req as any).headers['x-forwarded-proto'] || (req as any).protocol;
     const host = (req as any).get('host');
     if (!host) {
@@ -75,9 +77,8 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promis
 
 
 /**
- * Internal function to generate and store an embedding for a single chunk.
- * This replaces the logic of the old, separate worker endpoint.
- * It includes its own error handling to ensure the main loop continues.
+ * Processes a single chunk: fetches its content, generates an embedding, and updates it in the database.
+ * This function now throws an error on failure after marking the chunk as FAILED.
  * @param chunkId The database ID of the chunk to process.
  * @param documentId The parent document ID, used for logging.
  */
@@ -108,11 +109,64 @@ async function _processChunkEmbedding(chunkId: number, documentId: string) {
 
     } catch (error) {
         console.error(`[${documentId}] FATAL: Error processing embedding for chunk ${chunkId}. Marking as FAILED. Error details:`, error);
-        // Mark as failed so the polling can eventually complete.
         await supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunkId);
-        // We do not re-throw, allowing the main loop to continue processing other chunks.
+        // Re-throw so the calling worker knows to stop the chain.
+        throw error;
     }
 }
+
+/**
+ * The worker endpoint handler. It processes one chunk from a list and then
+ * triggers the next worker in the chain for the subsequent chunk.
+ */
+export const handleProcessChunk: RequestHandler = async (req, res) => {
+    const { documentId, allChunkIds, currentIndex } = req.body;
+
+    if (!documentId || !allChunkIds || currentIndex === undefined) {
+        return res.status(400).json({ message: 'documentId, allChunkIds, and currentIndex are required.' });
+    }
+
+    const chunkIdToProcess = allChunkIds[currentIndex];
+
+    try {
+        await _processChunkEmbedding(chunkIdToProcess, documentId);
+    } catch (error) {
+        // If processing a chunk fails, we log it and stop the chain.
+        console.error(`[${documentId}] Chain stopped due to failure processing chunk ${chunkIdToProcess}.`);
+        // Return 200 OK because the worker itself completed its task (of attempting to process).
+        // The failure is recorded in the DB, and the polling will reflect it.
+        return res.status(200).json({ message: 'Chunk processing failed, chain stopped.' });
+    }
+
+    // Check if there are more chunks to process
+    const nextIndex = currentIndex + 1;
+    if (nextIndex < allChunkIds.length) {
+        // Trigger the next worker in the chain without awaiting (fire and forget).
+        // We must use an absolute URL for the server to call itself.
+        const baseUrl = getBaseUrl(req);
+        fetch(`${baseUrl}/api/document/process-chunk`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ documentId, allChunkIds, currentIndex: nextIndex }),
+        }).catch(err => {
+            // This is a fire-and-forget call. If the trigger itself fails, it's a critical error.
+            console.error(`[${documentId}] CRITICAL: Failed to trigger next chunk processor for index ${nextIndex}. Error: ${err.message}`);
+            // Attempt to mark all remaining chunks as FAILED so the job doesn't hang forever.
+            const remainingChunkIds = allChunkIds.slice(nextIndex);
+            supabase.from('documents')
+              .update({ processing_status: 'FAILED' })
+              .in('id', remainingChunkIds)
+              .then(({ error }) => {
+                 if (error) console.error(`[${documentId}] Failed to mark remaining chunks as FAILED after trigger failure:`, error);
+              });
+        });
+        console.log(`[${documentId}] Chunk ${chunkIdToProcess} processed. Triggering next worker for index ${nextIndex}.`);
+    } else {
+        console.log(`[${documentId}] All chunks processed. Chain complete for document ${documentId}.`);
+    }
+
+    res.status(200).json({ message: 'Chunk processed. Next worker in chain triggered if applicable.' });
+};
 
 
 /**
@@ -120,7 +174,7 @@ async function _processChunkEmbedding(chunkId: number, documentId: string) {
  * 1. Downloads file from storage.
  * 2. Extracts text and chunks it.
  * 3. Inserts all chunks into DB with a 'PENDING' status.
- * 4. Kicks off a SEQUENTIAL, background process to generate embeddings.
+ * 4. Kicks off the FIRST worker in the chained execution.
  * 5. Returns immediately to the client with a 202 Accepted status.
  */
 export const handleProcessDocument: RequestHandler = async (req, res) => {
@@ -179,18 +233,24 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
             const returnedBatch = await insertChunks(batch);
             insertedChunks.push(...returnedBatch);
         }
-        console.log(`[${documentId}] All chunks inserted. Starting sequential embedding generation in the background.`);
+        const allChunkIds = insertedChunks.map(c => c.id);
 
-        // 4. Asynchronously process embeddings sequentially in the background.
-        // This IIFE is intentionally not awaited. The serverless function will continue
-        // running this process after it has sent the response to the client.
-        (async () => {
-            for (const chunk of insertedChunks) {
-                // Await each chunk individually to process them sequentially
-                await _processChunkEmbedding(chunk.id, documentId);
-            }
-            console.log(`[${documentId}] Background embedding generation complete for all chunks.`);
-        })();
+        // 4. Kick off the processing chain if there are chunks to process.
+        if (allChunkIds.length > 0) {
+             console.log(`[${documentId}] All chunks inserted. Kicking off processing chain for ${allChunkIds.length} chunks.`);
+             const baseUrl = getBaseUrl(req);
+             // Fire and forget the first worker
+             fetch(`${baseUrl}/api/document/process-chunk`, {
+                 method: 'POST',
+                 headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify({ documentId, allChunkIds, currentIndex: 0 }),
+             }).catch(err => {
+                 console.error(`[${documentId}] CRITICAL: Failed to trigger the first chunk processor. Error: ${err.message}`);
+                 supabase.from('documents')
+                    .update({ processing_status: 'FAILED' })
+                    .in('id', allChunkIds);
+             });
+        }
         
         // 5. Clean up the original file from storage
         console.log(`[${documentId}] Cleaning up original file from storage...`);
@@ -200,7 +260,7 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
         res.status(202).json({ documentId });
 
     } catch (error) {
-        console.error(`[${documentId}] FATAL ERROR during document processing:`, error);
+        console.error(`[${documentId}] FATAL ERROR during document processing orchestration:`, error);
         if (error instanceof Error && error.stack) {
             console.error('Stack trace:', error.stack);
         }
