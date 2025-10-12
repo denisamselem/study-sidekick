@@ -96,12 +96,19 @@ TEXT: "${text}"`;
 
     } catch (error)
     {
-        console.error(`Failed to create embedding for text: "${text.substring(0, 100)}..."`, error);
-        // Fallback to a random vector on failure to prevent the entire pipeline from crashing.
-        console.warn("Falling back to a random vector due to embedding generation error.");
-        const vector = Array.from({ length: EMBEDDING_DIMENSION }, () => Math.random() * 2 - 1);
-        const magnitude = Math.sqrt(vector.reduce((sum, val) => sum + val * val, 0));
-        if (magnitude === 0) return Array(EMBEDDING_DIMENSION).fill(0);
-        return vector.map(val => val / magnitude);
+        let errorMessage = `Failed to create embedding for text: "${text.substring(0, 100)}..."`;
+        if (error instanceof Error) {
+            errorMessage += `\nError: ${error.message}`;
+            // The @google/genai SDK attaches detailed info to the error object.
+            // Stringifying it captures everything for debugging (e.g., rate limit details).
+            errorMessage += `\nDetails: ${JSON.stringify(error, null, 2)}`;
+            if (error.stack) {
+                errorMessage += `\nStack: ${error.stack}`;
+            }
+        } else {
+            errorMessage += `\nCaught non-Error object: ${JSON.stringify(error, null, 2)}`;
+        }
+        console.error(errorMessage);
+        throw error;
     }
 }

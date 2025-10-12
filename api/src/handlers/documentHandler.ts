@@ -1,5 +1,6 @@
 
 
+
 import { Request, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase';
@@ -151,7 +152,32 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
 };
 
 /**
+ * A utility function to retry an async operation with exponential backoff.
+ * @param fn The async function to execute.
+ * @param retries The maximum number of retries.
+ * @param delay The initial delay in milliseconds.
+ * @returns The result of the async function.
+ */
+async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
+    let lastError: Error | undefined;
+    for (let i = 0; i < retries; i++) {
+        try {
+            return await fn();
+        } catch (error: any) {
+            lastError = error;
+            if (i < retries - 1) {
+                const backoffDelay = delay * Math.pow(2, i);
+                console.warn(`Attempt ${i + 1} failed. Retrying in ${backoffDelay}ms...`, error.message);
+                await new Promise(resolve => setTimeout(resolve, backoffDelay));
+            }
+        }
+    }
+    throw lastError;
+}
+
+/**
  * Worker endpoint to generate an embedding for a single chunk.
+ * This now includes retry logic to handle transient errors like API rate limiting.
  */
 export const handleGenerateEmbedding: RequestHandler = async (req, res) => {
     const { chunkId } = req.body;
@@ -169,8 +195,9 @@ export const handleGenerateEmbedding: RequestHandler = async (req, res) => {
         if (fetchError || !chunk) {
             throw new Error(`Could not find chunk with ID ${chunkId}: ${fetchError?.message}`);
         }
-
-        const embedding = await createEmbedding(chunk.content);
+        
+        // Wrap the embedding call in retry logic to handle rate limits and transient errors
+        const embedding = await retry(() => createEmbedding(chunk.content));
 
         const { error: updateError } = await supabase
             .from('documents')
@@ -184,9 +211,12 @@ export const handleGenerateEmbedding: RequestHandler = async (req, res) => {
         res.status(200).json({ success: true });
 
     } catch (error) {
-        console.error(`Error processing embedding for chunk ${chunkId}:`, error);
+        // This block now only runs after all retries have failed.
+        console.error(`FATAL: Error processing embedding for chunk ${chunkId} after all retries:`, error);
         await supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunkId);
-        res.status(500).json({ message: 'Failed to process embedding.' });
+        // We send a 500, but the client doesn't see this. It's for our server logs.
+        // The important part is updating the status to FAILED.
+        res.status(500).json({ message: 'Failed to process embedding after multiple attempts.' });
     }
 };
 
