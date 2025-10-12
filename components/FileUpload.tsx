@@ -4,9 +4,10 @@ import { processTextDocument } from '../services/apiService';
 import { UploadIcon, LoadingSpinner } from './common/Icons';
 
 // Import pdfjs-dist and set up the worker
-import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
+// FIX: Import the main library from a direct, version-locked URL to bypass the
+// problematic importmap and guarantee version consistency with the worker.
+import * as pdfjsLib from 'https://aistudiocdn.com/pdfjs-dist@4.4.168/build/pdf.mjs';
 
-// FIX: Set the worker source directly to the full, absolute CDN URL.
 // The pdf.js library loads its worker via a mechanism that does not use the importmap.
 // Using a relative path (`/pdfjs-dist/...`) caused the server's catch-all route to return
 // index.html, leading to a MIME type error. This direct URL bypasses server routing

@@ -1,6 +1,7 @@
-// FIX: Use namespace import for express to avoid name collision with global
-// Fetch API types for Request and Response. This ensures the correct Express types are used.
-import * as express from 'express';
+// FIX: The previous namespace import (`* as express`) caused type resolution issues.
+// Switched to aliased, named type imports to explicitly use Express types and avoid
+// name collisions with global Fetch API types (Request, Response).
+import type { Request as ExpressRequest, Response as ExpressResponse, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';
@@ -18,8 +19,8 @@ function getWorkerHeaders(): HeadersInit {
     return headers;
 }
 
-// FIX: Changed req type to `express.Request` to use the correctly typed import from express.
-const getBaseUrl = (req: express.Request): string => {
+// FIX: Changed req type to `ExpressRequest` to use the correctly typed import from express.
+const getBaseUrl = (req: ExpressRequest): string => {
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
@@ -49,7 +50,7 @@ async function _processChunkEmbedding(chunkId: number, documentId: string) {
     }
 }
 
-export const handleProcessChunk: express.RequestHandler = async (req, res) => {
+export const handleProcessChunk: RequestHandler = async (req, res) => {
     const { chunkId, documentId } = req.body;
     if (!chunkId || !documentId) return res.status(400).json({ message: 'chunkId and documentId required.' });
 
@@ -72,7 +73,7 @@ export const handleProcessChunk: express.RequestHandler = async (req, res) => {
 /**
  * [INITIATOR] Creates the processing job and all document chunks from pre-extracted text.
  */
-export const handleProcessTextDocument: express.RequestHandler = async (req, res) => {
+export const handleProcessTextDocument: RequestHandler = async (req, res) => {
     const { text, fileName } = req.body;
     if (!text || !fileName) {
         return res.status(400).json({ message: 'Text content and fileName are required.' });
@@ -116,7 +117,7 @@ export const handleProcessTextDocument: express.RequestHandler = async (req, res
  */
 // Fix: Explicitly type `req` and `res` to avoid type inference issues with the global `Request` type,
 // which was causing properties like `.protocol` and `.get()` to not be found.
-export const handleGetDocumentStatus = async (req: express.Request, res: express.Response) => {
+export const handleGetDocumentStatus = async (req: ExpressRequest, res: ExpressResponse) => {
     const { documentId } = req.params;
     if (!documentId) return res.status(400).json({ message: 'documentId is required.' });
 
