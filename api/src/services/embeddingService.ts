@@ -3,7 +3,7 @@ import { HarmBlockThreshold, HarmCategory, Type } from '@google/genai';
 
 // We use a smaller dimension that is more suitable for a generative model.
 // This is a balance between semantic richness and generation speed/reliability.
-const EMBEDDING_DIMENSION = 768;
+const EMBEDDING_DIMENSION = 128;
 
 // By disabling all safety checks for this specific internal task, we can reduce
 // API overhead and latency. This is acceptable as we are processing the user's
