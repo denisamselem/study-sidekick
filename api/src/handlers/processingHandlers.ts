@@ -35,7 +35,7 @@ export const handleStart: RequestHandler = async (req, res) => {
         const jobId = uuidv4();
         const documentId = uuidv4();
 
-        storeJob(jobId, { documentId, chunks, filePath: path });
+        await storeJob(jobId, { documentId, chunks, filePath: path });
 
         res.status(200).json({ jobId, documentId, totalChunks: chunks.length });
 
@@ -56,7 +56,7 @@ export const handleBatch: RequestHandler = async (req, res) => {
     }
 
     try {
-        const job = getJob(jobId);
+        const job = await getJob(jobId);
         if (!job) {
             return res.status(404).json({ message: 'Job not found or expired.' });
         }
@@ -95,7 +95,7 @@ export const handleFinish: RequestHandler = async (req, res) => {
     }
     
     try {
-        const job = getJob(jobId);
+        const job = await getJob(jobId);
         if (job && job.filePath) {
              const { error: deleteError } = await supabase.storage
                 .from('documents')
@@ -106,7 +106,7 @@ export const handleFinish: RequestHandler = async (req, res) => {
             }
         }
         
-        deleteJob(jobId);
+        await deleteJob(jobId);
         res.status(200).json({ success: true });
 
     } catch (error) {
