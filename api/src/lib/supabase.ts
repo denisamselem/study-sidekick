@@ -1,10 +1,13 @@
 import { createClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_KEY;
+// FIX: Use the administrative service role key for all backend operations.
+// This key bypasses Row-Level Security (RLS) policies, which is required
+// for a trusted server to insert data into the database.
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
 
-if (!supabaseUrl || !supabaseKey) {
-    throw new Error('Supabase URL and Key must be provided in environment variables.');
+if (!supabaseUrl || !supabaseServiceKey) {
+    throw new Error('Supabase URL and Service Key must be provided in environment variables for the backend.');
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+export const supabase = createClient(supabaseUrl, supabaseServiceKey);
