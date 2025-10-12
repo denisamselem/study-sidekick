@@ -1,6 +1,3 @@
-
-
-
 import { Request, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase';
@@ -177,15 +174,18 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promis
 
 /**
  * Worker endpoint to generate an embedding for a single chunk.
- * This now includes retry logic to handle transient errors like API rate limiting.
+ * This is now robust against malformed requests and guarantees a status update.
  */
 export const handleGenerateEmbedding: RequestHandler = async (req, res) => {
-    const { chunkId } = req.body;
-    if (!chunkId) {
-        return res.status(400).json({ message: 'chunkId is required.' });
-    }
+    // Safely access chunkId to prevent crashes if the body is malformed.
+    const chunkId = (req.body as any)?.chunkId;
 
     try {
+        if (!chunkId) {
+            console.error('Malformed request to generate-embedding worker. Body was:', JSON.stringify(req.body));
+            return res.status(400).json({ message: 'chunkId is required in the request body.' });
+        }
+
         const { data: chunk, error: fetchError } = await supabase
             .from('documents')
             .select('content')
@@ -196,7 +196,6 @@ export const handleGenerateEmbedding: RequestHandler = async (req, res) => {
             throw new Error(`Could not find chunk with ID ${chunkId}: ${fetchError?.message}`);
         }
         
-        // Wrap the embedding call in retry logic to handle rate limits and transient errors
         const embedding = await retry(() => createEmbedding(chunk.content));
 
         const { error: updateError } = await supabase
@@ -211,11 +210,14 @@ export const handleGenerateEmbedding: RequestHandler = async (req, res) => {
         res.status(200).json({ success: true });
 
     } catch (error) {
-        // This block now only runs after all retries have failed.
-        console.error(`FATAL: Error processing embedding for chunk ${chunkId} after all retries:`, error);
-        await supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunkId);
-        // We send a 500, but the client doesn't see this. It's for our server logs.
-        // The important part is updating the status to FAILED.
+        // This catch block now handles everything: malformed requests, retries failing, DB errors.
+        console.error(`FATAL: Error processing embedding for chunk ${chunkId ?? 'unknown'}. Error details:`, error);
+        
+        // This is crucial: if something goes wrong, mark the chunk as FAILED so polling can complete.
+        if (chunkId) {
+            await supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunkId);
+        }
+        
         res.status(500).json({ message: 'Failed to process embedding after multiple attempts.' });
     }
 };
@@ -264,7 +266,6 @@ export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
         const isReady = isFinished && !hasFailed; // Ready only if finished and no failures.
         const progress = total > 0 ? ((completed + failed) / total) * 100 : 0;
         
-        // FIX: Add detailed logging to the status endpoint to diagnose polling issues.
         console.log(`[Status Check] DocID: ${documentId} | Total: ${total}, Completed: ${completed}, Failed: ${failed} -> isFinished: ${isFinished}`);
 
         res.status(200).json({ isReady, isFinished, hasFailed, progress: Math.round(progress) }); 
