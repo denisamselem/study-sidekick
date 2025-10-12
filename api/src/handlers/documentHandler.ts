@@ -188,6 +188,9 @@ export const handleProcessChunkAndContinue: RequestHandler = async (req, res) =>
             console.log(`[${documentId}] Successfully processed the final chunk (index ${currentIndex}). Chain complete.`);
         }
 
+        // Add a small delay to ensure the fetch request above is dispatched before the function terminates.
+        await new Promise(resolve => setTimeout(resolve, 100));
+
         // Immediately respond to the caller, breaking the synchronous chain.
         res.status(200).json({ message: `Successfully triggered next worker for index ${nextIndex}.` });
 
