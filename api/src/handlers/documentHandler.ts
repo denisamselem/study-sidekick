@@ -1,13 +1,14 @@
 // FIX: The previous namespace import for Express (`import * as express from 'express'`) was causing type resolution issues.
 // Switched to a named, aliased import for `Request` to prevent conflicts with global types and ensure
 // properties like `headers` and `protocol` are correctly recognized on the Express Request object.
-import { Request as ExpressRequest, RequestHandler } from 'express';
+import { Request, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';
 import { insertChunks } from '../services/ragService.js';
 import { createEmbedding } from '../services/embeddingService.js';
-import * as pdfjsLib from 'pdfjs-dist/build/pdf.js';
+// FIX: Changed import to explicitly get the default export for pdf-parse to resolve module interoperability issues.
+import { default as pdf } from 'pdf-parse';
 
 const MAX_CONCURRENT_EMBEDDING_WORKERS = 3;
 
@@ -20,12 +21,12 @@ function getWorkerHeaders(): HeadersInit {
     return headers;
 }
 
-const getBaseUrl = (req: ExpressRequest): string => {
+// FIX: Corrected the type of `req` to resolve errors where `headers`, `protocol`, and `get` were not found by using the direct `Request` type from express.
+const getBaseUrl = (req: Request): string => {
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
     }
-    // FIX: Corrected the type of `req` to resolve errors where `headers`, `protocol`, and `get` were not found.
     const protocol = req.headers['x-forwarded-proto'] as string || req.protocol;
     const host = req.get('host');
     if (!host) throw new Error("Could not determine host from request headers.");
@@ -100,16 +101,8 @@ export const handleExtractAndChunk: RequestHandler = async (req, res) => {
         const fileBuffer = Buffer.from(await blob.arrayBuffer());
         let text = '';
         if (job.mime_type === 'application/pdf') {
-            const loadingTask = pdfjsLib.getDocument(fileBuffer.buffer);
-            const doc = await loadingTask.promise;
-            let fullText = '';
-            for (let i = 1; i <= doc.numPages; i++) {
-                const page = await doc.getPage(i);
-                const textContent = await page.getTextContent();
-                const pageText = textContent.items.map((item: any) => item.str).join(' ');
-                fullText += pageText + ' \n';
-            }
-            text = fullText;
+            const data = await pdf(fileBuffer);
+            text = data.text;
         } else {
             text = fileBuffer.toString('utf8');
         }
