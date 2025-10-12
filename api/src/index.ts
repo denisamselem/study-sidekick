@@ -2,11 +2,11 @@
 import express, { Request, Response, NextFunction, RequestHandler } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import { handleProcessDocument, handleGetDocumentStatus, handleProcessChunk, handleExtractAndChunk } from './handlers/documentHandler';
-import { handleChat } from './handlers/chatHandler';
-import { handleQuiz } from './handlers/quizHandler';
-import { handleFlashcards } from './handlers/flashcardsHandler';
-import { handleConfig } from './handlers/configHandler';
+import { handleProcessDocument, handleGetDocumentStatus, handleProcessChunk, handleExtractAndChunk } from './handlers/documentHandler.js';
+import { handleChat } from './handlers/chatHandler.js';
+import { handleQuiz } from './handlers/quizHandler.js';
+import { handleFlashcards } from './handlers/flashcardsHandler.js';
+import { handleConfig } from './handlers/configHandler.js';
 
 dotenv.config();
 
@@ -23,11 +23,6 @@ const asyncHandler = (fn: any): any => (
 ) => {
   Promise.resolve(fn(req, res, next)).catch(next);
 };
-
-// Denis was here - trying to trigger a new build on Vercel
-// Denis was here - trying to trigger a new build on Vercel
-// Denis was here - trying to trigger a new build on Vercel
-// Denis was here - trying to trigger a new build on Vercel
 
 // API Routes
 app.get('/api/config', asyncHandler(handleConfig));

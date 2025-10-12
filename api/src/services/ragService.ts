@@ -1,8 +1,9 @@
 
-import { supabase } from '../lib/supabase';
-import { createEmbedding } from './embeddingService';
+
+import { supabase } from '../lib/supabase.js';
+import { createEmbedding } from './embeddingService.js';
 import { v4 as uuidv4 } from 'uuid';
-import { chunkText } from '../lib/textChunker';
+import { chunkText } from '../lib/textChunker.js';
 
 /**
  * Inserts a batch of pre-embedded chunks into the database and returns the newly created chunks with their IDs.

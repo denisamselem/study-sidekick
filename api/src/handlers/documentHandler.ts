@@ -1,13 +1,14 @@
 // FIX: Using a namespace import for Express to resolve type conflicts with the global Request type.
 // This ensures properties like `headers` and `protocol` are correctly recognized on the Express request object.
-import * as express from 'express';
+// FIX: Changed import from namespace ('* as express') to default ('express') to resolve type inference issues with the request object.
+import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { supabase } from '../lib/supabase';
-import { chunkText } from '../lib/textChunker';
-import { insertChunks } from '../services/ragService';
-import { createEmbedding } from '../services/embeddingService';
-// FIX: Use `require` syntax for importing the CommonJS `pdf-parse` module.
-import pdf = require('pdf-parse');
+import { supabase } from '../lib/supabase.js';
+import { chunkText } from '../lib/textChunker.js';
+import { insertChunks } from '../services/ragService.js';
+import { createEmbedding } from '../services/embeddingService.js';
+// FIX: Use ES module 'import from' syntax for 'pdf-parse' instead of 'require' to comply with the ECMAScript module target.
+import pdf from 'pdf-parse';
 
 const MAX_CONCURRENT_EMBEDDING_WORKERS = 3;
 

@@ -1,7 +1,7 @@
 import { RequestHandler } from 'express';
-import { queryRelevantChunks } from '../services/ragService';
-import { ai } from '../lib/gemini';
-import { Message } from '../../../types'; 
+import { queryRelevantChunks } from '../services/ragService.js';
+import { ai } from '../lib/gemini.js';
+import { Message } from '../../../types.js'; 
 
 export const handleChat: RequestHandler = async (req, res) => {
     const { documentId, history, message } = req.body as { documentId: string; history: Message[]; message: string };

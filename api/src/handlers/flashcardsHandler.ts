@@ -1,6 +1,6 @@
 import { RequestHandler } from 'express';
-import { queryRelevantChunks } from '../services/ragService';
-import { ai } from '../lib/gemini';
+import { queryRelevantChunks } from '../services/ragService.js';
+import { ai } from '../lib/gemini.js';
 import { Type } from '@google/genai';
 
 const flashcardsSchema = {
