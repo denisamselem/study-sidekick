@@ -75,6 +75,8 @@ async function downloadWithRetry(path: string, retries = 3, delay = 500) {
 
 /**
  * A utility function to retry an async operation with exponential backoff.
+ * It now correctly handles 429 rate limit errors by parsing the suggested
+ * delay from the Gemini API's error response.
  * @param fn The async function to execute.
  * @param retries The maximum number of retries.
  * @param delay The initial delay in milliseconds.
@@ -87,19 +89,21 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promis
             return await fn();
         } catch (error: any) {
             lastError = error;
-            const isRateLimitError = error.status === 429;
+            const isRateLimitError = error.status === 429 && error.message;
             let backoffDelay = delay * Math.pow(2, i);
 
             if (isRateLimitError) {
-                const retryAfterMatch = JSON.stringify(error).match(/retryDelay":"(\d+)s/);
+                // The error message from the Gemini API contains the suggested retry delay.
+                const retryAfterMatch = error.message.match(/"retryDelay":"(\d+)s"/);
                 if (retryAfterMatch && retryAfterMatch[1]) {
+                    // Use the suggested delay from the API, plus a small buffer.
                     backoffDelay = parseInt(retryAfterMatch[1], 10) * 1000 + 500;
                     console.warn(`Rate limit detected. Respecting API's suggested retry delay of ${backoffDelay}ms.`);
                 }
             }
             
             if (i < retries - 1) {
-                console.warn(`Attempt ${i + 1} failed. Retrying in ${backoffDelay}ms...`, error.message);
+                console.warn(`Attempt ${i + 1} failed. Retrying in ${backoffDelay}ms...`);
                 await new Promise(resolve => setTimeout(resolve, backoffDelay));
             }
         }
