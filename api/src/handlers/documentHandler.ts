@@ -234,6 +234,9 @@ export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
         const isReady = isFinished && !hasFailed; // Ready only if finished and no failures.
         const progress = total > 0 ? ((completed + failed) / total) * 100 : 0;
         
+        // FIX: Add detailed logging to the status endpoint to diagnose polling issues.
+        console.log(`[Status Check] DocID: ${documentId} | Total: ${total}, Completed: ${completed}, Failed: ${failed} -> isFinished: ${isFinished}`);
+
         res.status(200).json({ isReady, isFinished, hasFailed, progress: Math.round(progress) }); 
 
     } catch (error) {
