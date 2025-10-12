@@ -41,12 +41,15 @@ export async function insertChunks(chunksToInsert: { document_id: string, conten
 export async function queryRelevantChunks(documentId: string, queryText: string, matchCount: number = 5): Promise<{content: string}[]> {
     const queryEmbedding = await createEmbedding(queryText);
 
-    // FIX: Reordered parameters to resolve a PostgreSQL function overload ambiguity.
-    // The database has two `match_documents` functions with the same parameter names
-    // in a different order. This new order should unambiguously match one of them.
+    // FIX: Swapped the parameter order in the RPC call to `match_documents`.
+    // The previous order (`query_embedding`, `document_id_filter`) did not resolve
+    // the function overload ambiguity. This new order (`document_id_filter`, 
+    // `query_embedding`) matches the other possible function signature in the
+    // database. This is an attempt to force PostgREST to select one specific
+    // function over the other, resolving the error.
     const { data, error } = await supabase.rpc('match_documents', {
-        query_embedding: queryEmbedding,
         document_id_filter: documentId,
+        query_embedding: queryEmbedding,
         match_count: matchCount,
     });
 
