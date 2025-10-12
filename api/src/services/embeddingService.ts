@@ -76,18 +76,29 @@ TEXT: "${text}"`;
         console.log(`${logPrefix} Response text obtained. Parsing JSON.`);
 
         const parsed = JSON.parse(jsonText.trim());
-        const vectorInts: number[] = parsed.vector;
+        let vectorInts: number[] = parsed.vector || [];
 
-        if (!vectorInts || !Array.isArray(vectorInts) || vectorInts.length !== EMBEDDING_DIMENSION) {
-             console.error(`${logPrefix} Model returned invalid vector shape. Expected ${EMBEDDING_DIMENSION}, got ${vectorInts?.length}. Raw: "${jsonText}"`);
-             throw new Error(`Model returned an invalid vector shape.`);
+        // FIX: Pad or truncate the vector to handle model inaccuracies.
+        if (vectorInts.length < EMBEDDING_DIMENSION) {
+            console.warn(`${logPrefix} Vector is too short (${vectorInts.length}). Padding with zeros to reach ${EMBEDDING_DIMENSION}.`);
+            const padding = Array(EMBEDDING_DIMENSION - vectorInts.length).fill(0);
+            vectorInts.push(...padding);
+        } else if (vectorInts.length > EMBEDDING_DIMENSION) {
+            console.warn(`${logPrefix} Vector is too long (${vectorInts.length}). Truncating to ${EMBEDDING_DIMENSION}.`);
+            vectorInts = vectorInts.slice(0, EMBEDDING_DIMENSION);
+        }
+        
+        // This check now serves as a final safeguard against completely malformed (e.g., non-array) responses.
+        if (!Array.isArray(vectorInts) || vectorInts.length !== EMBEDDING_DIMENSION) {
+             console.error(`${logPrefix} Model returned a malformed vector that could not be corrected. Raw: "${jsonText}"`);
+             throw new Error(`Model returned a malformed vector that could not be corrected.`);
         }
 
         if (vectorInts.some(v => typeof v !== 'number' || isNaN(v))) {
              console.error(`${logPrefix} Model returned non-numeric values. Raw: "${jsonText}"`);
              throw new Error('Model returned non-numeric values.');
         }
-        console.log(`${logPrefix} JSON parsed and vector validated.`);
+        console.log(`${logPrefix} JSON parsed and vector validated/corrected.`);
         
         // Convert integers [-100, 100] to floats [-1.0, 1.0]
         const vectorFloats = vectorInts.map(i => i / 100.0);
