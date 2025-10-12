@@ -1,8 +1,6 @@
 
-
-
-// FIX: Alias the `Request` type from express to avoid a name collision with the global DOM `Request` type.
-import { Request as ExpressRequest, RequestHandler } from 'express';
+// FIX: Use a namespace import for express to avoid type collisions with global DOM types.
+import * as express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase';
 import { chunkText } from '../lib/textChunker';
@@ -22,8 +20,7 @@ function getWorkerHeaders(): HeadersInit {
     return headers;
 }
 
-// FIX: Use the aliased `ExpressRequest` type to ensure the correct properties are available on the `req` object.
-const getBaseUrl = (req: ExpressRequest): string => {
+const getBaseUrl = (req: express.Request): string => {
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
@@ -64,7 +61,7 @@ async function _processChunkEmbedding(chunkId: number, documentId: string) {
     }
 }
 
-export const handleProcessChunk: RequestHandler = async (req, res) => {
+export const handleProcessChunk: express.RequestHandler = async (req, res) => {
     const { chunkId, documentId } = req.body;
     if (!chunkId || !documentId) return res.status(400).json({ message: 'chunkId and documentId required.' });
 
@@ -87,7 +84,7 @@ export const handleProcessChunk: RequestHandler = async (req, res) => {
 /**
  * [WORKER - STAGE 1] Downloads file, extracts text, chunks it, and saves chunks to DB.
  */
-export const handleExtractAndChunk: RequestHandler = async (req, res) => {
+export const handleExtractAndChunk: express.RequestHandler = async (req, res) => {
     const { documentId } = req.body;
     if (!documentId) return res.status(400).json({ message: 'documentId is required.' });
 
@@ -132,7 +129,7 @@ export const handleExtractAndChunk: RequestHandler = async (req, res) => {
 /**
  * [INITIATOR] Creates the initial processing job. Returns immediately.
  */
-export const handleProcessDocument: RequestHandler = async (req, res) => {
+export const handleProcessDocument: express.RequestHandler = async (req, res) => {
     const { path, mimeType } = req.body;
     if (!path || !mimeType) return res.status(400).json({ message: 'File path and mimeType are required.' });
 
@@ -152,7 +149,7 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
 /**
  * [CONTROLLER] Polling endpoint that reports status and triggers workers for both stages.
  */
-export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
+export const handleGetDocumentStatus: express.RequestHandler = async (req, res) => {
     const { documentId } = req.params;
     if (!documentId) return res.status(400).json({ message: 'documentId is required.' });
 

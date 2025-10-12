@@ -5,7 +5,6 @@ interface FlashcardViewProps {
     flashcards: Flashcard[];
 }
 
-//FIX: Implement the FlashcardView component to display and interact with flashcards.
 export const FlashcardView: React.FC<FlashcardViewProps> = ({ flashcards }) => {
     const [currentIndex, setCurrentIndex] = useState(0);
     const [isFlipped, setIsFlipped] = useState(false);

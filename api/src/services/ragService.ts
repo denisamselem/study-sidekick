@@ -54,7 +54,6 @@ export async function queryRelevantChunks(documentId: string, queryText: string,
 
     return data;
 }
-// FIX: Add missing 'addDocument' function.
 /**
  * Processes a document's text, creates embeddings, and stores it.
  * @param text The text content of the document.

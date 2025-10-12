@@ -1,5 +1,5 @@
 
-import { pipeline, Pipeline } from '@xenova/transformers';
+import type { Pipeline } from '@xenova/transformers';
 
 /**
  * A singleton class to manage the text embedding pipeline.
@@ -9,13 +9,27 @@ import { pipeline, Pipeline } from '@xenova/transformers';
 class EmbeddingPipeline {
     static task = 'feature-extraction';
     static model = 'Xenova/all-MiniLM-L6-v2';
+    // The instance is a Promise that resolves to the pipeline itself.
     static instance: Promise<Pipeline> | null = null;
 
-    static async getInstance() {
+    static async getInstance(): Promise<Pipeline> {
         if (this.instance === null) {
-            // The pipeline function will download and cache the model on the first run.
-            console.log('Initializing embedding model for the first time...');
-            this.instance = pipeline(this.task, this.model);
+            console.log('Dynamically importing @xenova/transformers and initializing embedding model...');
+            // Use a dynamic import() which is compatible with CommonJS environments like Vercel's Node.js runtime.
+            this.instance = new Promise(async (resolve, reject) => {
+                try {
+                    // 1. Dynamically import the library
+                    const { pipeline } = await import('@xenova/transformers');
+                    // 2. Initialize the pipeline, which downloads the model on first run.
+                    const extractor = await pipeline(this.task, this.model);
+                    console.log('Embedding model initialized successfully.');
+                    resolve(extractor);
+                } catch (e) {
+                    console.error("Fatal: Failed to load or initialize the embedding model.", e);
+                    this.instance = null; // Reset on failure to allow a subsequent retry.
+                    reject(e);
+                }
+            });
         }
         return this.instance;
     }
