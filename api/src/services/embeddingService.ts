@@ -1,5 +1,4 @@
 
-import type { Pipeline } from '@xenova/transformers';
 
 /**
  * A singleton class to manage the text embedding pipeline.
@@ -7,12 +6,14 @@ import type { Pipeline } from '@xenova/transformers';
  * saving memory and initialization time on subsequent requests.
  */
 class EmbeddingPipeline {
-    static task = 'feature-extraction';
+    // FIX: Explicitly type `task` as a string literal to match the expected `PipelineType`.
+    static task: 'feature-extraction' = 'feature-extraction';
     static model = 'Xenova/all-MiniLM-L6-v2';
     // The instance is a Promise that resolves to the pipeline itself.
-    static instance: Promise<Pipeline> | null = null;
+    // Use `any` to avoid a top-level import of an ES module, which causes issues in CommonJS.
+    static instance: Promise<any> | null = null;
 
-    static async getInstance(): Promise<Pipeline> {
+    static async getInstance(): Promise<any> {
         if (this.instance === null) {
             console.log('Dynamically importing @xenova/transformers and initializing embedding model...');
             // Use a dynamic import() which is compatible with CommonJS environments like Vercel's Node.js runtime.
