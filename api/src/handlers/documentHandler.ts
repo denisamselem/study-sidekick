@@ -8,6 +8,14 @@ import { createEmbedding } from '../services/embeddingService';
 // Use require for pdf-parse to ensure compatibility with CommonJS module format in various environments.
 const pdf = require('pdf-parse');
 
+// A custom error to signal that a long cooldown is required, and the task should be re-queued.
+class RateLimitCoolDownError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'RateLimitCoolDownError';
+    }
+}
+
 // The maximum number of chunks to process concurrently.
 // A low number is crucial to stay within serverless platform limits on a hobby plan.
 const MAX_CONCURRENT_WORKERS = 3;
@@ -74,12 +82,13 @@ async function downloadWithRetry(path: string, retries = 3, delay = 500) {
 }
 
 /**
- * A utility function to retry an async operation with exponential backoff.
- * It now correctly handles 429 rate limit errors by parsing the suggested
- * delay from the Gemini API's error response.
+ * A utility function to retry an async operation.
+ * For 429 rate limit errors, it parses the suggested delay from the Gemini API.
+ * If the delay is short, it waits. If it's long, it throws a special error
+ * to signal that the task should be re-queued by the caller.
  * @param fn The async function to execute.
- * @param retries The maximum number of retries.
- * @param delay The initial delay in milliseconds.
+ * @param retries The maximum number of retries for non-rate-limit errors.
+ * @param delay The initial delay in milliseconds for exponential backoff.
  * @returns The result of the async function.
  */
 async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> {
@@ -93,17 +102,29 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promis
             let backoffDelay = delay * Math.pow(2, i);
 
             if (isRateLimitError) {
-                // The error message from the Gemini API contains the suggested retry delay.
-                const retryAfterMatch = error.message.match(/"retryDelay":"(\d+)s"/);
-                if (retryAfterMatch && retryAfterMatch[1]) {
-                    // Use the suggested delay from the API, plus a small buffer.
-                    backoffDelay = parseInt(retryAfterMatch[1], 10) * 1000 + 500;
-                    console.warn(`Rate limit detected. Respecting API's suggested retry delay of ${backoffDelay}ms.`);
+                const retryAfterMatchS = error.message.match(/Please retry in ([\d.]+)s/);
+                const retryAfterMatchMs = error.message.match(/Please retry in ([\d.]+)ms/);
+
+                let apiWaitTime: number | null = null;
+                if (retryAfterMatchS && retryAfterMatchS[1]) {
+                    apiWaitTime = parseFloat(retryAfterMatchS[1]) * 1000;
+                } else if (retryAfterMatchMs && retryAfterMatchMs[1]) {
+                    apiWaitTime = parseFloat(retryAfterMatchMs[1]);
+                }
+                
+                if (apiWaitTime !== null) {
+                    backoffDelay = apiWaitTime + 500; // Use API delay + buffer
+                    console.warn(`Rate limit detected. API suggests retry delay of ~${Math.round(apiWaitTime)}ms.`);
+                }
+                
+                if (backoffDelay > 5000) { // 5-second threshold
+                     console.warn(`Required cooldown (${Math.round(backoffDelay)}ms) is too long. Re-queueing chunk.`);
+                     throw new RateLimitCoolDownError(`Cooldown of ${Math.round(backoffDelay)}ms required.`);
                 }
             }
             
             if (i < retries - 1) {
-                console.warn(`Attempt ${i + 1} failed. Retrying in ${backoffDelay}ms...`);
+                console.warn(`Attempt ${i + 1} failed. Retrying in ${Math.round(backoffDelay)}ms...`);
                 await new Promise(resolve => setTimeout(resolve, backoffDelay));
             }
         }
@@ -113,8 +134,9 @@ async function retry<T>(fn: () => Promise<T>, retries = 3, delay = 1000): Promis
 
 
 /**
- * Processes a single chunk: fetches its content, generates an embedding, and updates it in the database.
- * This function now throws an error on failure after marking the chunk as FAILED.
+ * Processes a single chunk: generates an embedding and updates it in the database.
+ * If it encounters a long rate-limit delay, it resets the chunk's status to PENDING
+ * to be picked up by a later worker, and returns gracefully.
  * @param chunkId The database ID of the chunk to process.
  * @param documentId The parent document ID, used for logging.
  */
@@ -146,9 +168,19 @@ async function _processChunkEmbedding(chunkId: number, documentId: string) {
         console.log(`[${documentId}] [CHUNK ${chunkId}] Successfully processed and saved embedding.`);
 
     } catch (error) {
+        if (error instanceof RateLimitCoolDownError) {
+            // This is not a fatal error. We just need to wait.
+            // Put the chunk back in the queue by resetting its status.
+            console.log(`[${documentId}] [CHUNK ${chunkId}] Re-queueing chunk due to rate limit. Status -> PENDING.`);
+            await supabase.from('documents').update({ processing_status: 'PENDING' }).eq('id', chunkId);
+            // Return gracefully. The worker's job is done for now.
+            return; 
+        }
+
+        // For all other errors, it's a real failure.
         console.error(`[${documentId}] [CHUNK ${chunkId}] FATAL: Error during embedding process. Marking as FAILED. Details:`, error);
         await supabase.from('documents').update({ processing_status: 'FAILED' }).eq('id', chunkId);
-        throw error;
+        throw error; // Propagate the error to the handler.
     }
 }
 
@@ -182,8 +214,9 @@ export const handleProcessChunk: RequestHandler = async (req, res) => {
     console.log(`[${documentId}] [CHUNK ${chunkId}] Successfully claimed chunk. Starting processing.`);
     try {
         await _processChunkEmbedding(chunkId, documentId);
-        res.status(200).json({ message: `Chunk ${chunkId} processed successfully.` });
+        res.status(200).json({ message: `Chunk ${chunkId} processed or re-queued successfully.` });
     } catch (error) {
+        // This will now only catch fatal (non-requeue) errors.
         res.status(500).json({ message: `Failed to process chunk ${chunkId}.` });
     }
 };
