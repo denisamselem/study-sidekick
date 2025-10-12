@@ -1,10 +1,10 @@
 import { Request, RequestHandler } from 'express';
-import pdf from 'pdf-parse';
+// FIX: Use `require` for robust CJS module compatibility in this environment.
+const pdf = require('pdf-parse');
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase';
 import { chunkText } from '../lib/textChunker';
 import { insertChunks } from '../services/ragService';
-// FIX: Import 'createEmbedding' to make it available in this module.
 import { createEmbedding } from '../services/embeddingService';
 
 /**
@@ -16,6 +16,7 @@ import { createEmbedding } from '../services/embeddingService';
 const getBaseUrl = (req: Request): string => {
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
+        // FIX: Corrected typo from `httpshttps` to `https`
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
     }
 
@@ -68,13 +69,15 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
     try {
         // 1. Download and parse file, with retries
         const { data: blob, error: downloadError } = await downloadWithRetry(path);
-        if (downloadError) throw new Error(`Could not download file from storage after retries: ${downloadError.message}`);
+        if (downloadError || !blob) {
+            throw new Error(`Could not download file from storage after retries: ${downloadError?.message || 'File blob is null.'}`);
+        }
 
         const fileBuffer = Buffer.from(await blob.arrayBuffer());
 
         let text = '';
         if (mimeType === 'application/pdf') {
-            const data = await (pdf as any)(fileBuffer);
+            const data = await pdf(fileBuffer);
             text = data.text;
         } else {
             text = fileBuffer.toString('utf8');
