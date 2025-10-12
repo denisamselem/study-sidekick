@@ -65,7 +65,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, setIsLoadi
                 ref={fileInputRef}
                 onChange={handleFileChange}
                 className="hidden"
-                accept=".txt, .md, .pdf"
+                accept=".txt, .md"
                 disabled={isLoading}
             />
             <button

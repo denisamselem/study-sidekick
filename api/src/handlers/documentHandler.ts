@@ -1,6 +1,4 @@
 import { Request, RequestHandler } from 'express';
-// FIX: Use `require` for robust CJS module compatibility in this environment.
-const pdf = require('pdf-parse');
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase';
 import { chunkText } from '../lib/textChunker';
@@ -16,7 +14,6 @@ import { createEmbedding } from '../services/embeddingService';
 const getBaseUrl = (req: Request): string => {
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
-        // FIX: Corrected typo from `httpshttps` to `https`
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
     }
 
@@ -77,8 +74,7 @@ export const handleProcessDocument: RequestHandler = async (req, res) => {
 
         let text = '';
         if (mimeType === 'application/pdf') {
-            const data = await pdf(fileBuffer);
-            text = data.text;
+            throw new Error('PDF processing is not supported due to library instability.');
         } else {
             text = fileBuffer.toString('utf8');
         }
