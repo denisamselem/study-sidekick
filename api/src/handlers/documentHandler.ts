@@ -368,13 +368,8 @@ export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
         const isReady = isFinished && !hasFailed; // Ready only if finished and no failures.
         const progress = total > 0 ? ((completed + failed) / total) * 100 : 0;
         
-        // Don't spam logs on status check unless something interesting is happening.
-        if (progress > 0 && progress < 100) {
-            console.log(`[Status Check] DocID: ${documentId} | Progress: ${Math.round(progress)}% (${completed+failed}/${total})`);
-        } else if (isFinished) {
-            console.log(`[Status Check] DocID: ${documentId} | Finished. Total: ${total}, Completed: ${completed}, Failed: ${failed}`);
-        }
-        
+        // Always log the status check for debugging purposes, but make it concise.
+        console.log(`[Status Check] DocID: ${documentId} | Total: ${total}, Completed: ${completed}, Failed: ${failed}, Progress: ${Math.round(progress)}%`);
 
         res.status(200).json({ isReady, isFinished, hasFailed, progress: Math.round(progress) }); 
 

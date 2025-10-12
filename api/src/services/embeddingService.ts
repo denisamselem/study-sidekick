@@ -54,7 +54,8 @@ export async function createEmbedding(text: string, documentId?: string, chunkId
         const prompt = `Generate a semantic vector with ${EMBEDDING_DIMENSION} dimensions for the following text. Each dimension should be an integer between -100 and 100.
 
 TEXT: "${text}"`;
-
+        
+        console.log(`${logPrefix} Awaiting response from Gemini API...`);
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: prompt,
@@ -66,11 +67,13 @@ TEXT: "${text}"`;
                 safetySettings,
             },
         });
+        console.log(`${logPrefix} Gemini API response received.`);
 
         const jsonText = response.text;
         if (!jsonText) {
             throw new Error('Model returned an empty response for embedding.');
         }
+        console.log(`${logPrefix} Response text obtained. Parsing JSON.`);
 
         const parsed = JSON.parse(jsonText.trim());
         const vectorInts: number[] = parsed.vector;
@@ -84,6 +87,7 @@ TEXT: "${text}"`;
              console.error(`${logPrefix} Model returned non-numeric values. Raw: "${jsonText}"`);
              throw new Error('Model returned non-numeric values.');
         }
+        console.log(`${logPrefix} JSON parsed and vector validated.`);
         
         // Convert integers [-100, 100] to floats [-1.0, 1.0]
         const vectorFloats = vectorInts.map(i => i / 100.0);
@@ -94,7 +98,7 @@ TEXT: "${text}"`;
              return Array(EMBEDDING_DIMENSION).fill(0);
         }
 
-        console.log(`${logPrefix} Successfully created embedding vector.`);
+        console.log(`${logPrefix} Successfully created and normalized embedding vector.`);
         return vectorFloats.map(val => val / magnitude);
 
     } catch (error)
