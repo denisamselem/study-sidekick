@@ -51,7 +51,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({ onFileUpload, setIsLoadi
             setProgress({ processed: 0, total: totalChunks });
 
             // 3. Process the document in batches, driven by the client
-            const BATCH_SIZE = 5; // This is the number of chunks per batch
+            const BATCH_SIZE = 2; // This is the number of chunks per batch
             for (let i = 0; i < totalChunks; i += BATCH_SIZE) {
                 await processBatch(jobId, i, BATCH_SIZE);
                 setProgress(p => ({ ...p!, processed: Math.min(i + BATCH_SIZE, totalChunks) }));
