@@ -1,8 +1,6 @@
 // FIX: Using a namespace import for Express to resolve type conflicts with the global Request type.
-// This ensures properties like `headers` and `protocol` are correctly recognized on the Express request object.
-// FIX: Changed import from namespace ('* as express') to default ('express') to resolve type inference issues with the request object.
-// FIX: Changed to default express import to resolve type errors on request object properties.
-import express from 'express';
+// This ensures that properties like `headers` and `protocol` are correctly recognized on the Express.Request object.
+import * as express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';

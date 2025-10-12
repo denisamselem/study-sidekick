@@ -12,7 +12,10 @@
       "src": "api/src/index.ts",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": "api/node_modules/@xenova/transformers/**"
+        "includeFiles": [
+          "api/node_modules/@xenova/transformers/**",
+          "api/node_modules/pdfjs-dist/**"
+        ]
       }
     }
   ],
