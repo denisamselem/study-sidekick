@@ -1,9 +1,11 @@
 
 
 
+
 // FIX: The namespace import `import * as express` was causing type resolution issues.
 // Reverting to named imports is consistent with other handlers and resolves the type errors.
-import { Request, RequestHandler } from 'express';
+// FIX: Aliased Request to ExpressRequest to avoid name collision with the global DOM Request type.
+import { Request as ExpressRequest, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase';
 import { chunkText } from '../lib/textChunker';
@@ -23,7 +25,7 @@ function getWorkerHeaders(): HeadersInit {
     return headers;
 }
 
-const getBaseUrl = (req: Request): string => {
+const getBaseUrl = (req: ExpressRequest): string => {
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
