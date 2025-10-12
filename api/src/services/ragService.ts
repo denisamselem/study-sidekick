@@ -8,6 +8,10 @@ import { chunkText } from '../lib/textChunker';
  * @param chunksToInsert An array of chunk objects to be inserted.
  */
 export async function insertChunks(chunksToInsert: { id: string, document_id: string, content: string, embedding: number[] | null, processing_status: 'PENDING' | 'COMPLETED' | 'FAILED' }[]) {
+    if (chunksToInsert.length === 0) {
+        return;
+    }
+    
     const { error } = await supabase
         .from('documents')
         .insert(chunksToInsert);

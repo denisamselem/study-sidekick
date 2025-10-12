@@ -11,6 +11,7 @@ const App: React.FC = () => {
     const [documentId, setDocumentId] = useState<string | null>(null);
     const [documentName, setDocumentName] = useState<string | null>(null);
     const [isProcessing, setIsProcessing] = useState<boolean>(false);
+    const [processingProgress, setProcessingProgress] = useState(0);
     const [chatHistory, setChatHistory] = useState<Message[]>([]);
     const [studyAid, setStudyAid] = useState<StudyAid>(null);
     const [currentView, setCurrentView] = useState<ViewType>('chat');
@@ -31,8 +32,10 @@ const App: React.FC = () => {
             pollingIntervalRef.current = window.setInterval(async () => {
                 try {
                     const status = await getDocumentStatus(documentId);
+                    setProcessingProgress(status.progress);
                     if (status.isReady) {
                         setIsProcessing(false);
+                        setProcessingProgress(100);
                         stopPolling();
                     }
                 } catch (err) {
@@ -55,6 +58,7 @@ const App: React.FC = () => {
         setStudyAid(null);
         setCurrentView('chat');
         setError(null);
+        setProcessingProgress(0);
         setIsProcessing(true); // Start polling
     }, []);
 
@@ -104,7 +108,7 @@ const App: React.FC = () => {
     const renderProcessingOverlay = () => (
         <div className="absolute inset-0 bg-white/80 dark:bg-slate-900/80 flex flex-col items-center justify-center z-10">
             <LoadingSpinner />
-            <h3 className="mt-4 text-lg font-semibold">Processing Document</h3>
+            <h3 className="mt-4 text-lg font-semibold">Processing Document ({processingProgress}%)</h3>
             <p className="text-slate-600 dark:text-slate-400">This may take a few moments. We're preparing your study materials...</p>
         </div>
     );
