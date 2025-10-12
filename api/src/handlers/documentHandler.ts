@@ -1,6 +1,6 @@
-// FIX: Aliased `Request` to `ExpressRequest` to avoid a name collision with the global `Request`
-// type from the Fetch API. This ensures the correct Express types are used, resolving property access errors.
-import { Request as ExpressRequest, RequestHandler, Response } from 'express';
+// FIX: Aliased `Request` and `Response` to `ExpressRequest` and `ExpressResponse` to avoid a name collision with the global
+// types from the Fetch API. This ensures the correct Express types are used, resolving property access errors.
+import { Request as ExpressRequest, RequestHandler, Response as ExpressResponse } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';
@@ -49,7 +49,7 @@ async function _processChunkEmbedding(chunkId: number, documentId: string) {
     }
 }
 
-export const handleProcessChunk: RequestHandler = async (req, res) => {
+export const handleProcessChunk: RequestHandler = async (req: ExpressRequest, res: ExpressResponse) => {
     const { chunkId, documentId } = req.body;
     if (!chunkId || !documentId) return res.status(400).json({ message: 'chunkId and documentId required.' });
 
@@ -72,7 +72,7 @@ export const handleProcessChunk: RequestHandler = async (req, res) => {
 /**
  * [INITIATOR] Creates the processing job and all document chunks from pre-extracted text.
  */
-export const handleProcessTextDocument: RequestHandler = async (req, res) => {
+export const handleProcessTextDocument: RequestHandler = async (req: ExpressRequest, res: ExpressResponse) => {
     const { text, fileName } = req.body;
     if (!text || !fileName) {
         return res.status(400).json({ message: 'Text content and fileName are required.' });
@@ -116,7 +116,7 @@ export const handleProcessTextDocument: RequestHandler = async (req, res) => {
  */
 // Fix: Explicitly type `req` and `res` to avoid type inference issues with the global `Request` type,
 // which was causing properties like `.protocol` and `.get()` to not be found.
-export const handleGetDocumentStatus = async (req: ExpressRequest, res: Response) => {
+export const handleGetDocumentStatus = async (req: ExpressRequest, res: ExpressResponse) => {
     const { documentId } = req.params;
     if (!documentId) return res.status(400).json({ message: 'documentId is required.' });
 
