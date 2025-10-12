@@ -1,11 +1,5 @@
-
-
-
-
-
-
-// FIX: Use `express.Request` to avoid name collision with the global Request type from DOM.
-import express, { RequestHandler } from 'express';
+// FIX: Import `Request` directly from express to ensure the correct type is used.
+import { Request, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';
@@ -23,8 +17,8 @@ function getWorkerHeaders(): HeadersInit {
     return headers;
 }
 
-// FIX: Change req type to `express.Request` to resolve property access errors.
-const getBaseUrl = (req: express.Request): string => {
+// FIX: Change req type to `Request` from express to resolve property access errors.
+const getBaseUrl = (req: Request): string => {
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;

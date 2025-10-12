@@ -6,9 +6,12 @@ import { UploadIcon, LoadingSpinner } from './common/Icons';
 // Import pdfjs-dist and set up the worker
 import * as pdfjsLib from 'pdfjs-dist/build/pdf.mjs';
 
-// Set the worker source directly to the path that is defined in the importmap.
-// This avoids the Vite-specific `?url` import which causes issues with CDN-based import maps.
-pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist/build/pdf.worker.mjs';
+// FIX: Set the worker source directly to the full, absolute CDN URL.
+// The pdf.js library loads its worker via a mechanism that does not use the importmap.
+// Using a relative path (`/pdfjs-dist/...`) caused the server's catch-all route to return
+// index.html, leading to a MIME type error. This direct URL bypasses server routing
+// and ensures the correct worker script is loaded.
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@4.4.168/build/pdf.worker.mjs';
 
 interface FileUploadProps {
     onFileUpload: (documentId: string, fileName: string) => void;
