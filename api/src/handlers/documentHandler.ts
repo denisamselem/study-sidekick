@@ -8,7 +8,11 @@ import { createEmbedding } from '../services/embeddingService';
 // Use require for pdf-parse to ensure compatibility with CommonJS module format in various environments.
 const pdf = require('pdf-parse');
 
-const MAX_CONCURRENT_WORKERS = 5;
+// The API has a rate limit of 10 RPM. By reducing to a single worker, we can control the flow.
+const MAX_CONCURRENT_WORKERS = 1; 
+
+// A 7-second delay ensures we stay under the 10 RPM limit (1 req / 6s).
+const API_CALL_DELAY_MS = 7000;
 
 /**
  * Builds the necessary headers for internal worker-to-worker fetch requests.
@@ -154,7 +158,7 @@ async function _processChunkEmbedding(chunkId: number, documentId: string) {
 
 
 /**
- * A worker that processes a batch of chunks sequentially.
+ * A worker that processes a batch of chunks sequentially with a delay between each call.
  */
 export const handleProcessBatch: RequestHandler = async (req, res) => {
     const { documentId, chunkIds } = req.body;
@@ -167,8 +171,14 @@ export const handleProcessBatch: RequestHandler = async (req, res) => {
     }
 
     try {
-        for (const chunkId of chunkIds) {
+        for (const [index, chunkId] of chunkIds.entries()) {
             await _processChunkEmbedding(chunkId, documentId);
+
+            // Add a delay after each call, except for the very last one, to respect API rate limits.
+            if (index < chunkIds.length - 1) {
+                console.log(`[${documentId}] Waiting ${API_CALL_DELAY_MS}ms before next API call to respect rate limits.`);
+                await new Promise(resolve => setTimeout(resolve, API_CALL_DELAY_MS));
+            }
         }
         res.status(200).json({ message: `Successfully processed batch of ${chunkIds.length} chunks.` });
     } catch (error) {
