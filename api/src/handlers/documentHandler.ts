@@ -18,10 +18,13 @@ function getWorkerHeaders(): HeadersInit {
     const headers: HeadersInit = {
         'Content-Type': 'application/json',
     };
-    // The VERCEL_AUTOMATION_BYPASS_SECRET allows a Vercel Function to call an endpoint
-    // on the same deployment, bypassing Deployment Protection.
-    if (process.env.VERCEL_AUTOMATION_BYPASS_SECRET) {
-        headers['x-vercel-protection-bypass'] = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+    const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
+
+    if (bypassSecret) {
+        console.log(`[getWorkerHeaders] VERCEL_AUTOMATION_BYPASS_SECRET found. Adding 'x-vercel-protection-bypass' header.`);
+        headers['x-vercel-protection-bypass'] = bypassSecret;
+    } else {
+        console.warn(`[getWorkerHeaders] WARNING: VERCEL_AUTOMATION_BYPASS_SECRET environment variable not found. Internal API calls will likely be blocked by Vercel Deployment Protection, causing a 401 error.`);
     }
     return headers;
 }
