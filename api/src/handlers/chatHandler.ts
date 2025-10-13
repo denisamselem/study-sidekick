@@ -1,17 +1,18 @@
+
 import { RequestHandler } from 'express';
 import { queryRelevantChunks } from '../services/ragService.js';
 import { ai } from '../lib/gemini.js';
 import { Message } from '../../../types.js'; 
 
 export const handleChat: RequestHandler = async (req, res) => {
-    const { documentId, history, message } = req.body as { documentId: string; history: Message[]; message: string };
+    const { documentIds, history, message } = req.body as { documentIds: string[]; history: Message[]; message: string };
 
-    if (!documentId || !message) {
-        return res.status(400).json({ message: 'documentId and message are required.' });
+    if (!documentIds || !Array.isArray(documentIds) || documentIds.length === 0 || !message) {
+        return res.status(400).json({ message: 'documentIds (non-empty array) and message are required.' });
     }
     
     try {
-        const contextChunks = await queryRelevantChunks(documentId, message);
+        const contextChunks = await queryRelevantChunks(documentIds, message);
         const contextText = contextChunks.map(c => c.content).join('\n\n---\n\n');
 
         const model = 'gemini-2.5-flash';

@@ -4,22 +4,49 @@ import { FileUpload } from './components/FileUpload';
 import { ChatWindow } from './components/ChatWindow';
 import { QuizView } from './components/QuizView';
 import { FlashcardView } from './components/FlashcardView';
-import { postMessage, fetchQuiz, fetchFlashcards, getDocumentStatus } from './services/apiService';
+import { postMessage, fetchQuiz, fetchFlashcards, getDocumentStatus, processTextDocument } from './services/apiService';
 import { Message, StudyAid, ViewType, Quiz, Flashcard } from './types';
-import { ChatIcon, QuizIcon, FlashcardIcon, LoadingSpinner, PageLoader } from './components/common/Icons';
+import { ChatIcon, QuizIcon, FlashcardIcon, LoadingSpinner, PageLoader, DocumentIcon } from './components/common/Icons';
 
-const POLLING_INTERVAL_MS = 1000;
+// Import pdfjs-dist and set up the worker
+import * as pdfjsLib from 'https://aistudiocdn.com/pdfjs-dist@4.4.168/build/pdf.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@4.4.168/build/pdf.worker.mjs';
+
+
+const POLLING_INTERVAL_MS = 2000;
+
+const extractTextFromFile = async (file: File): Promise<string> => {
+    if (file.type === 'application/pdf') {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+        let fullText = '';
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            fullText += textContent.items.map(item => (item as any).str).join(' ');
+            fullText += '\n\n';
+        }
+        return fullText;
+    } else {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = (error) => reject(error);
+            reader.readAsText(file);
+        });
+    }
+};
+
 
 const App: React.FC = () => {
-    const [documentId, setDocumentId] = useState<string | null>(null);
-    const [documentName, setDocumentName] = useState<string | null>(null);
+    const [documents, setDocuments] = useState<{ id: string, name: string }[]>([]);
     const [isProcessing, setIsProcessing] = useState<boolean>(false);
     const [processingProgress, setProcessingProgress] = useState(0);
     const [processingMessage, setProcessingMessage] = useState<string>('Processing Document...');
     const [chatHistory, setChatHistory] = useState<Message[]>([]);
     const [studyAid, setStudyAid] = useState<StudyAid>(null);
     const [currentView, setCurrentView] = useState<ViewType>('chat');
-    const [isLoading, setIsLoading] = useState<boolean>(false);
+    const [isLoading, setIsLoading] = useState<boolean>(false); // For study aid generation
     const [error, setError] = useState<string | null>(null);
 
     const pollingIntervalRef = useRef<number | null>(null);
@@ -30,25 +57,27 @@ const App: React.FC = () => {
             pollingIntervalRef.current = null;
         }
     };
-
+    
     useEffect(() => {
-        if (isProcessing && documentId) {
+        if (isProcessing && documents.length > 0) {
             pollingIntervalRef.current = window.setInterval(async () => {
                 try {
-                    const status = await getDocumentStatus(documentId);
-                    setProcessingProgress(status.progress);
-                    if (status.message) {
-                        setProcessingMessage(status.message);
-                    }
+                    const statuses = await Promise.all(documents.map(doc => getDocumentStatus(doc.id)));
+
+                    const totalProgress = statuses.reduce((sum, s) => sum + s.progress, 0) / statuses.length;
+                    const allFinished = statuses.every(s => s.isFinished);
+                    const anyFailed = statuses.some(s => s.hasFailed);
+
+                    setProcessingProgress(Math.round(totalProgress));
                     
-                    if (status.isFinished) {
+                    if (allFinished) {
                         stopPolling();
                         setIsProcessing(false);
-
-                        if (status.hasFailed) {
-                            setError("Document processing failed. Please try uploading again.");
+                        if (anyFailed) {
+                           setError("Some documents failed to process. Results may be incomplete.");
                         }
-                        setProcessingProgress(100);
+                    } else {
+                         setProcessingMessage(`Generating embeddings...`);
                     }
                 } catch (err) {
                     console.error("Polling error:", err);
@@ -60,30 +89,57 @@ const App: React.FC = () => {
         }
 
         return () => stopPolling();
-    }, [isProcessing, documentId]);
+    }, [isProcessing, documents]);
 
 
-    const handleFileUpload = useCallback((newDocumentId: string, fileName: string) => {
-        setDocumentId(newDocumentId);
-        setDocumentName(fileName);
+    const handleFilesUpload = useCallback(async (files: File[]) => {
+        setIsProcessing(true);
+        setError(null);
         setChatHistory([]);
         setStudyAid(null);
         setCurrentView('chat');
-        setError(null);
+        setDocuments([]);
         setProcessingProgress(0);
-        setProcessingMessage('Initializing process...');
-        setIsProcessing(true); // Start polling
+        setProcessingMessage(`Extracting text from ${files.length} document(s)...`);
+        
+        try {
+            const uploadPromises = files.map(async (file) => {
+                const text = await extractTextFromFile(file);
+                if (!text.trim()) {
+                    // We can choose to throw an error or just skip the file
+                    console.warn(`Skipping empty file: ${file.name}`);
+                    return null;
+                }
+                const { documentId } = await processTextDocument(text, file.name);
+                return { id: documentId, name: file.name };
+            });
+
+            const results = (await Promise.all(uploadPromises)).filter(res => res !== null) as { id: string, name: string }[];
+            
+            if (results.length === 0) {
+                 throw new Error("None of the selected files could be processed.");
+            }
+
+            setProcessingMessage('Initializing processing...');
+            setDocuments(results); // This will trigger the polling useEffect
+
+        } catch(err) {
+            const message = err instanceof Error ? err.message : "An unknown error occurred during upload.";
+            setError(message);
+            setIsProcessing(false);
+        }
     }, []);
 
     const handleSendMessage = useCallback(async (message: string) => {
-        if (!documentId) return;
+        if (documents.length === 0) return;
         
+        const documentIds = documents.map(d => d.id);
         const userMessage: Message = { role: 'user', text: message };
         setChatHistory(prev => [...prev, userMessage]);
         setIsLoading(true);
 
         try {
-            const response = await postMessage(documentId, chatHistory, message);
+            const response = await postMessage(documentIds, chatHistory, message);
             const modelMessage: Message = { role: 'model', text: response.text, sources: response.sources };
             setChatHistory(prev => [...prev, modelMessage]);
         } catch (e) {
@@ -92,11 +148,12 @@ const App: React.FC = () => {
         } finally {
             setIsLoading(false);
         }
-    }, [documentId, chatHistory]);
+    }, [documents, chatHistory]);
 
     const handleGenerateStudyAid = async (type: 'quiz' | 'flashcards') => {
-        if (!documentId) return;
+        if (documents.length === 0) return;
         
+        const documentIds = documents.map(d => d.id);
         setIsLoading(true);
         setCurrentView(type);
         setStudyAid(null);
@@ -104,10 +161,10 @@ const App: React.FC = () => {
 
         try {
             if (type === 'quiz') {
-                const quiz = await fetchQuiz(documentId);
+                const quiz = await fetchQuiz(documentIds);
                 setStudyAid(quiz);
             } else {
-                const flashcards = await fetchFlashcards(documentId);
+                const flashcards = await fetchFlashcards(documentIds);
                 setStudyAid(flashcards);
             }
         } catch (e) {
@@ -122,7 +179,10 @@ const App: React.FC = () => {
         <div className="absolute inset-0 bg-white/80 dark:bg-slate-900/80 flex flex-col items-center justify-center z-10 text-center p-4">
             <LoadingSpinner />
             <h3 className="mt-4 text-lg font-semibold">{processingMessage} ({processingProgress}%)</h3>
-            <p className="text-slate-600 dark:text-slate-400">This may take a few moments. We're preparing your study materials...</p>
+            <div className="w-full max-w-md bg-slate-200 dark:bg-slate-700 rounded-full h-2.5 mt-2">
+                <div className="bg-indigo-600 h-2.5 rounded-full" style={{ width: `${processingProgress}%` }}></div>
+            </div>
+            <p className="text-slate-600 dark:text-slate-400 mt-2">This may take a few moments. We're preparing your study materials...</p>
         </div>
     );
 
@@ -136,30 +196,20 @@ const App: React.FC = () => {
             )
         }
         
-        if (error && currentView !== 'chat') { // Show specific error for study aids
+        if (error && currentView !== 'chat') {
              return <div className="text-center p-8 text-red-500">{error}</div>;
         }
 
         switch (currentView) {
             case 'quiz':
-                if (studyAid && !Array.isArray(studyAid)) {
-                    return <QuizView quiz={studyAid as Quiz} />;
-                }
+                if (studyAid && !Array.isArray(studyAid)) return <QuizView quiz={studyAid as Quiz} />;
                 return null;
             case 'flashcards':
-                if (studyAid && Array.isArray(studyAid)) {
-                    return <FlashcardView flashcards={studyAid as Flashcard[]} />;
-                }
+                if (studyAid && Array.isArray(studyAid)) return <FlashcardView flashcards={studyAid as Flashcard[]} />;
                 return null;
             case 'chat':
             default:
-                return (
-                     <ChatWindow
-                        messages={chatHistory}
-                        onSendMessage={handleSendMessage}
-                        isLoading={isLoading}
-                    />
-                );
+                return <ChatWindow messages={chatHistory} onSendMessage={handleSendMessage} isLoading={isLoading || isProcessing} />;
         }
     }
 
@@ -173,21 +223,29 @@ const App: React.FC = () => {
                     <p className="text-slate-500 dark:text-slate-400 mt-1">Your AI-powered learning partner.</p>
                 </header>
 
-                <FileUpload onFileUpload={handleFileUpload} setIsLoading={setIsLoading} isLoading={isLoading || isProcessing} />
+                <FileUpload onFilesUpload={handleFilesUpload} isProcessing={isProcessing} />
 
-                {documentId && (
+                {documents.length > 0 && (
                     <div className={`flex-grow flex flex-col space-y-4 transition-opacity ${isProcessing ? 'opacity-50' : 'opacity-100'}`}>
-                        <div className="p-3 bg-slate-100 dark:bg-slate-900/50 rounded-lg">
-                           <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Current Document:</p>
-                           <p className="text-sm text-indigo-600 dark:text-indigo-400 truncate">{documentName}</p>
-                           {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
+                        <div className="p-4 bg-slate-100 dark:bg-slate-900/50 rounded-lg">
+                           <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Loaded Materials:</h3>
+                           <ul className="space-y-2">
+                                {documents.map(doc => (
+                                    <li key={doc.id} className="flex items-center text-sm text-indigo-600 dark:text-indigo-400">
+                                        <DocumentIcon className="w-4 h-4 mr-2 flex-shrink-0" />
+                                        <span className="truncate" title={doc.name}>{doc.name}</span>
+                                    </li>
+                                ))}
+                           </ul>
+                           {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
                         </div>
+
                         <h2 className="text-xl font-semibold border-b border-slate-200 dark:border-slate-700 pb-2">Tools</h2>
                         <fieldset disabled={isUiDisabled} className="contents">
                             <nav className="flex flex-col space-y-2">
                                <button onClick={() => setCurrentView('chat')} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${currentView === 'chat' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'hover:bg-slate-100 dark:hover:bg-slate-700'}`}>
                                     <ChatIcon className="w-6 h-6" />
-                                    <span>Chat with Document</span>
+                                    <span>Chat with Documents</span>
                                 </button>
                                 <button onClick={() => handleGenerateStudyAid('quiz')} className={`flex items-center space-x-3 p-3 rounded-lg transition-colors ${currentView === 'quiz' ? 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300' : 'hover:bg-slate-100 dark:hover:bg-slate-700'}`}>
                                     <QuizIcon className="w-6 h-6" />
@@ -204,17 +262,19 @@ const App: React.FC = () => {
             </aside>
 
             <main className="flex-1 p-6 bg-slate-100 dark:bg-slate-900">
-                {!documentId ? (
+                {documents.length === 0 && !isProcessing ? (
                     <div className="flex items-center justify-center h-full bg-white dark:bg-slate-800 rounded-lg shadow-inner">
                         <div className="text-center text-slate-500 dark:text-slate-400">
                             <h2 className="text-2xl font-semibold">Welcome to Study Sidekick</h2>
-                            <p className="mt-2">Upload your study material (.pdf, .txt, or .md) to get started.</p>
+                            <p className="mt-2">Upload your study materials (.pdf, .txt, or .md) to get started.</p>
                         </div>
                     </div>
                 ) : (
                     <div className="h-full relative">
                         {isProcessing && renderProcessingOverlay()}
-                        {renderContent()}
+                        <div className={`${isProcessing ? 'blur-sm' : ''}`}>
+                            {renderContent()}
+                        </div>
                     </div>
                 )}
             </main>

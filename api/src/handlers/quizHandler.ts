@@ -1,3 +1,4 @@
+
 import { RequestHandler } from 'express';
 import { queryRelevantChunks } from '../services/ragService.js';
 import { ai } from '../lib/gemini.js';
@@ -24,14 +25,14 @@ const quizSchema = {
 };
 
 export const handleQuiz: RequestHandler = async (req, res) => {
-    const { documentId } = req.body;
+    const { documentIds } = req.body;
 
-    if (!documentId) {
-        return res.status(400).json({ message: 'documentId is required.' });
+    if (!documentIds || !Array.isArray(documentIds) || documentIds.length === 0) {
+        return res.status(400).json({ message: 'documentIds array is required.' });
     }
 
     try {
-        const contextChunks = await queryRelevantChunks(documentId, "key concepts and main ideas", 10);
+        const contextChunks = await queryRelevantChunks(documentIds, "key concepts and main ideas", 10);
         const contextText = contextChunks.map(c => c.content).join('\n\n---\n\n');
 
         const prompt = `Based on the following document context, generate a multiple-choice quiz with a title and around 5-10 questions. Each question should have 4 options and one correct answer.

@@ -1,3 +1,4 @@
+
 import { RequestHandler } from 'express';
 import { queryRelevantChunks } from '../services/ragService.js';
 import { ai } from '../lib/gemini.js';
@@ -16,14 +17,14 @@ const flashcardsSchema = {
 };
 
 export const handleFlashcards: RequestHandler = async (req, res) => {
-    const { documentId } = req.body;
+    const { documentIds } = req.body;
 
-    if (!documentId) {
-        return res.status(400).json({ message: 'documentId is required.' });
+    if (!documentIds || !Array.isArray(documentIds) || documentIds.length === 0) {
+        return res.status(400).json({ message: 'documentIds array is required.' });
     }
 
      try {
-        const contextChunks = await queryRelevantChunks(documentId, "key terms, definitions, and important facts", 15);
+        const contextChunks = await queryRelevantChunks(documentIds, "key terms, definitions, and important facts", 15);
         const contextText = contextChunks.map(c => c.content).join('\n\n---\n\n');
 
         const prompt = `Based on the following document context, generate a set of 10-15 flashcards. Create a mix of question/answer and fill-in-the-blank styles.

@@ -32,39 +32,45 @@ export async function insertChunks(chunksToInsert: { document_id: string, conten
 }
 
 /**
- * Finds text chunks relevant to a given query.
- * @param documentId The ID of the document to search within.
+ * Finds text chunks relevant to a given query across multiple documents.
+ * @param documentIds The IDs of the documents to search within.
  * @param queryText The user's query.
- * @param matchCount The number of chunks to retrieve.
+ * @param matchCount The total number of chunks to retrieve.
  * @returns An array of relevant text chunks.
  */
-export async function queryRelevantChunks(documentId: string, queryText: string, matchCount: number = 5): Promise<{content: string}[]> {
-    const queryEmbedding = await createEmbedding(queryText);
-
-    const rpcParams = {
-        document_id_filter: documentId,
-        query_embedding: queryEmbedding,
-        match_count: matchCount,
-    };
-
-    const { data, error } = await supabase.rpc('match_documents', rpcParams);
-
-    if (error) {
-        // Improve error handling to detect the specific database misconfiguration.
-        if ('code' in error && error.code === 'PGRST203') {
-            console.error('FATAL DATABASE ERROR: Ambiguous function call to "match_documents".', error);
-            // Throw a more informative error to guide the developer to the real solution.
-            throw new Error(
-                'A critical database misconfiguration was detected. There are duplicate "match_documents" functions, and the system cannot choose which one to use. ' +
-                'Please resolve this by running the following command in your Supabase SQL Editor: ' +
-                'DROP FUNCTION public.match_documents(query_embedding vector, document_id_filter uuid, match_count integer);'
-            );
-        }
-        console.error('Error matching documents:', error);
-        throw new Error('Failed to query for relevant chunks.');
+export async function queryRelevantChunks(documentIds: string[], queryText: string, matchCount: number = 5): Promise<{content: string}[]> {
+    if (!documentIds || documentIds.length === 0) {
+        return [];
     }
 
-    return data;
+    const queryEmbedding = await createEmbedding(queryText);
+    
+    // To get a balanced set of chunks from all documents, calculate how many to fetch from each.
+    const countPerDoc = Math.max(1, Math.ceil(matchCount / documentIds.length));
+
+    const chunkPromises = documentIds.map(docId => 
+        supabase.rpc('match_documents', {
+            document_id_filter: docId,
+            query_embedding: queryEmbedding,
+            match_count: countPerDoc,
+        })
+    );
+
+    const results = await Promise.all(chunkPromises);
+    
+    let combinedChunks: {content: string}[] = [];
+    for (const result of results) {
+        if (result.error) {
+            console.error(`Error querying chunks for a document: ${result.error.message}`);
+            // Continue even if one document fails to return results
+        } else if (result.data) {
+            combinedChunks.push(...result.data);
+        }
+    }
+
+    // Since we cannot re-rank without similarity scores from the current RPC, we just return the collection.
+    // A simple slice can truncate if needed to respect the original matchCount intent.
+    return combinedChunks.slice(0, matchCount);
 }
 /**
  * Processes a document's text, creates embeddings, and stores it.

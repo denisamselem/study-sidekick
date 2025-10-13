@@ -23,29 +23,29 @@ export const getDocumentStatus = async (documentId: string): Promise<{ isReady: 
     return handleResponse<{ isReady: boolean; isFinished: boolean; hasFailed: boolean; progress: number; message?: string }>(response);
 };
 
-export const postMessage = async (documentId: string, history: Message[], message: string): Promise<{ text: string, sources: Source[] }> => {
+export const postMessage = async (documentIds: string[], history: Message[], message: string): Promise<{ text: string, sources: Source[] }> => {
     const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documentId, history, message }),
+        body: JSON.stringify({ documentIds, history, message }),
     });
     return handleResponse<{ text: string, sources: Source[] }>(response);
 };
 
-export const fetchQuiz = async (documentId: string): Promise<Quiz> => {
+export const fetchQuiz = async (documentIds: string[]): Promise<Quiz> => {
     const response = await fetch('/api/quiz', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documentId }),
+        body: JSON.stringify({ documentIds }),
     });
     return handleResponse<Quiz>(response);
 };
 
-export const fetchFlashcards = async (documentId: string): Promise<Flashcard[]> => {
+export const fetchFlashcards = async (documentIds: string[]): Promise<Flashcard[]> => {
     const response = await fetch('/api/flashcards', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documentId }),
+        body: JSON.stringify({ documentIds }),
     });
     return handleResponse<Flashcard[]>(response);
 };
