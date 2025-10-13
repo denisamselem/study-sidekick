@@ -8,7 +8,7 @@ import { chunkText } from '../lib/textChunker.js';
 import { insertChunks } from '../services/ragService.js';
 import { createEmbedding } from '../services/embeddingService.js';
 
-const MAX_CONCURRENT_EMBEDDING_WORKERS = 3;
+const MAX_CONCURRENT_EMBEDDING_WORKERS = 6;
 
 function getWorkerHeaders(): HeadersInit {
     const headers: HeadersInit = { 'Content-Type': 'application/json' };
