@@ -40,7 +40,8 @@ const extractTextFromFile = async (file: File): Promise<string> => {
 
 const App: React.FC = () => {
     const [documents, setDocuments] = useState<{ id: string, name: string }[]>([]);
-    const [isProcessing, setIsProcessing] = useState<boolean>(false);
+    const [isUploading, setIsUploading] = useState<boolean>(false); // For initial file read + API call
+    const [isProcessing, setIsProcessing] = useState<boolean>(false); // For backend embedding generation
     const [processingProgress, setProcessingProgress] = useState(0);
     const [processingMessage, setProcessingMessage] = useState<string>('Processing Document...');
     const [chatHistory, setChatHistory] = useState<Message[]>([]);
@@ -96,7 +97,7 @@ const App: React.FC = () => {
 
 
     const handleFilesUpload = useCallback(async (files: File[]) => {
-        setIsProcessing(true);
+        setIsUploading(true);
         setError(null);
         setProcessingProgress(0);
         setProcessingMessage(`Extracting text from ${files.length} new document(s)...`);
@@ -114,17 +115,19 @@ const App: React.FC = () => {
 
             const results = (await Promise.all(uploadPromises)).filter(res => res !== null) as { id: string, name: string }[];
             
-            if (results.length === 0) {
-                 throw new Error("None of the selected files could be processed.");
+            if (results.length > 0) {
+                setDocuments(prevDocs => [...prevDocs, ...results]);
+                setProcessingMessage('Initializing processing...');
+                setIsProcessing(true); // This triggers the poller with the updated documents list
+            } else if (files.length > 0) {
+                 throw new Error("None of the selected files could be processed or they were empty.");
             }
-
-            setProcessingMessage('Initializing processing...');
-            setDocuments(prevDocs => [...prevDocs, ...results]); // Append new documents
 
         } catch(err) {
             const message = err instanceof Error ? err.message : "An unknown error occurred during upload.";
             setError(message);
-            setIsProcessing(false);
+        } finally {
+            setIsUploading(false);
         }
     }, []);
 
@@ -135,6 +138,7 @@ const App: React.FC = () => {
         setStudyAid(null);
         setCurrentView('chat');
         setIsProcessing(false);
+        setIsUploading(false);
         setError(null);
         setProcessingProgress(0);
         setProcessingMessage('Processing Document...');
@@ -220,11 +224,11 @@ const App: React.FC = () => {
                 return null;
             case 'chat':
             default:
-                return <ChatWindow messages={chatHistory} onSendMessage={handleSendMessage} isLoading={isLoading || isProcessing} />;
+                return <ChatWindow messages={chatHistory} onSendMessage={handleSendMessage} isLoading={isLoading || isProcessing || isUploading} />;
         }
     }
 
-    const isUiDisabled = isLoading || isProcessing;
+    const isUiDisabled = isLoading || isProcessing || isUploading;
 
     return (
         <div className="min-h-screen flex flex-col md:flex-row text-slate-800 dark:text-slate-200">
@@ -234,7 +238,7 @@ const App: React.FC = () => {
                     <p className="text-slate-500 dark:text-slate-400 mt-1">Your AI-powered learning partner.</p>
                 </header>
 
-                <FileUpload onFilesUpload={handleFilesUpload} isProcessing={isProcessing} />
+                <FileUpload onFilesUpload={handleFilesUpload} isProcessing={isUploading || isProcessing} />
 
                 {documents.length > 0 && (
                     <div className={`flex-grow flex flex-col space-y-4 transition-opacity ${isProcessing ? 'opacity-50' : 'opacity-100'}`}>
@@ -284,7 +288,7 @@ const App: React.FC = () => {
             </aside>
 
             <main className="flex-1 p-6 bg-slate-100 dark:bg-slate-900">
-                {documents.length === 0 && !isProcessing ? (
+                {documents.length === 0 && !isProcessing && !isUploading ? (
                     <div className="flex items-center justify-center h-full bg-white dark:bg-slate-800 rounded-lg shadow-inner">
                         <div className="text-center text-slate-500 dark:text-slate-400">
                             <h2 className="text-2xl font-semibold">Welcome to Study Sidekick</h2>
