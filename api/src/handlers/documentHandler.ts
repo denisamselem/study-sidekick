@@ -1,7 +1,5 @@
-// FIX: Use named imports for Express types. The previous namespace import (`import * as express`)
-// was causing type resolution issues, likely due to conflicts with global Fetch API types.
-// FIX: Alias Request to ExpressRequest to avoid conflict with the global Request type from DOM typings.
-import { Request as ExpressRequest, Response, RequestHandler } from 'express';
+// FIX: Use named imports for Express types to ensure consistency and avoid module resolution issues that can lead to type conflicts with global APIs.
+import { Request, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';
@@ -19,8 +17,8 @@ function getWorkerHeaders(): HeadersInit {
     return headers;
 }
 
-// FIX: Changed req type to `ExpressRequest` to use the correctly typed, aliased import from express, resolving type errors.
-const getBaseUrl = (req: ExpressRequest): string => {
+// FIX: Changed req type to `Request` to use the correctly namespaced import from express, resolving type errors.
+const getBaseUrl = (req: Request): string => {
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
@@ -115,9 +113,9 @@ export const handleProcessTextDocument: RequestHandler = async (req, res) => {
 /**
  * [CONTROLLER] Polling endpoint that reports status and triggers embedding workers.
  */
-// Fix: Explicitly type `req` and `res` to avoid type inference issues with the global `Request` type,
-// which was causing properties like `.protocol` and `.get()` to not be found.
-export const handleGetDocumentStatus: RequestHandler = async (req: ExpressRequest, res: Response) => {
+// FIX: Use `RequestHandler` to ensure `req` and `res` are correctly typed from the Express module,
+// which avoids conflicts with global types and resolves property-not-found errors.
+export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
     const { documentId } = req.params;
     if (!documentId) return res.status(400).json({ message: 'documentId is required.' });
 

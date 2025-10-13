@@ -8,6 +8,8 @@ import { postMessage, fetchQuiz, fetchFlashcards, getDocumentStatus } from './se
 import { Message, StudyAid, ViewType, Quiz, Flashcard } from './types';
 import { ChatIcon, QuizIcon, FlashcardIcon, LoadingSpinner } from './components/common/Icons';
 
+const POLLING_INTERVAL_MS = 2000;
+
 const App: React.FC = () => {
     const [documentId, setDocumentId] = useState<string | null>(null);
     const [documentName, setDocumentName] = useState<string | null>(null);
@@ -54,7 +56,7 @@ const App: React.FC = () => {
                     setIsProcessing(false);
                     stopPolling();
                 }
-            }, 3000);
+            }, POLLING_INTERVAL_MS);
         }
 
         return () => stopPolling();
