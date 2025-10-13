@@ -8,7 +8,7 @@ import { postMessage, fetchQuiz, fetchFlashcards, getDocumentStatus } from './se
 import { Message, StudyAid, ViewType, Quiz, Flashcard } from './types';
 import { ChatIcon, QuizIcon, FlashcardIcon, LoadingSpinner, PageLoader } from './components/common/Icons';
 
-const POLLING_INTERVAL_MS = 2000;
+const POLLING_INTERVAL_MS = 1000;
 
 const App: React.FC = () => {
     const [documentId, setDocumentId] = useState<string | null>(null);
