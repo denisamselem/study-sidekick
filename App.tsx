@@ -6,7 +6,7 @@ import { QuizView } from './components/QuizView';
 import { FlashcardView } from './components/FlashcardView';
 import { postMessage, fetchQuiz, fetchFlashcards, getDocumentStatus } from './services/apiService';
 import { Message, StudyAid, ViewType, Quiz, Flashcard } from './types';
-import { ChatIcon, QuizIcon, FlashcardIcon, LoadingSpinner } from './components/common/Icons';
+import { ChatIcon, QuizIcon, FlashcardIcon, LoadingSpinner, PageLoader } from './components/common/Icons';
 
 const POLLING_INTERVAL_MS = 2000;
 
@@ -129,9 +129,9 @@ const App: React.FC = () => {
     const renderContent = (): ReactNode => {
         if (isLoading && (currentView === 'quiz' || currentView === 'flashcards')) {
             return (
-                <div className="flex flex-col items-center justify-center h-full text-slate-600 dark:text-slate-300">
-                     <LoadingSpinner />
-                     <p className="mt-4 text-lg">Generating {currentView}... this might take a moment.</p>
+                <div className="bg-white dark:bg-slate-800 rounded-lg shadow-lg h-full flex flex-col items-center justify-center">
+                     <PageLoader />
+                     <p className="mt-4 text-lg text-slate-600 dark:text-slate-300">Generating {currentView}... this might take a moment.</p>
                 </div>
             )
         }
