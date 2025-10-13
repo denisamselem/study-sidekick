@@ -72,6 +72,46 @@ export async function queryRelevantChunks(documentIds: string[], queryText: stri
     // A simple slice can truncate if needed to respect the original matchCount intent.
     return combinedChunks.slice(0, matchCount);
 }
+
+/**
+ * Fetches a representative sample of chunks from each document, bypassing vector search.
+ * This is useful for broad tasks like generating a quiz from the entire corpus.
+ * @param documentIds The IDs of the documents to sample from.
+ * @param chunkCount The total number of chunks to retrieve.
+ * @returns An array of text chunks.
+ */
+export async function getRepresentativeChunks(documentIds: string[], chunkCount: number = 10): Promise<{content: string}[]> {
+    if (!documentIds || documentIds.length === 0) {
+        return [];
+    }
+    
+    const countPerDoc = Math.max(1, Math.ceil(chunkCount / documentIds.length));
+
+    const chunkPromises = documentIds.map(async (docId) => {
+        const { data, error } = await supabase
+            .from('documents')
+            .select('content')
+            .eq('document_id', docId)
+            .eq('processing_status', 'COMPLETED')
+            .order('id', { ascending: true }) // Ensure we get the first chunks
+            .limit(countPerDoc);
+        
+        if (error) {
+            console.error(`Error fetching representative chunks for doc ${docId}:`, error);
+            return []; // Return empty array on error for this doc
+        }
+        return data || [];
+    });
+
+    const results = await Promise.all(chunkPromises);
+    
+    // Flatten the array of arrays into a single array of chunks
+    const combinedChunks = results.flat();
+
+    return combinedChunks.slice(0, chunkCount);
+}
+
+
 /**
  * Processes a document's text, creates embeddings, and stores it.
  * @param text The text content of the document.

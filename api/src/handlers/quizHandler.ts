@@ -1,6 +1,6 @@
 
 import { RequestHandler } from 'express';
-import { queryRelevantChunks } from '../services/ragService.js';
+import { getRepresentativeChunks } from '../services/ragService.js';
 import { ai } from '../lib/gemini.js';
 import { Type } from '@google/genai';
 
@@ -32,10 +32,10 @@ export const handleQuiz: RequestHandler = async (req, res) => {
     }
 
     try {
-        const contextChunks = await queryRelevantChunks(documentIds, "key concepts and main ideas", 10);
+        const contextChunks = await getRepresentativeChunks(documentIds, 10);
         const contextText = contextChunks.map(c => c.content).join('\n\n---\n\n');
 
-        const prompt = `Based on the following document context, generate a multiple-choice quiz with a title and around 5-10 questions. Each question should have 4 options and one correct answer.
+        const prompt = `Based on the following document context, which is composed of text from multiple sources, generate a multiple-choice quiz with a title and around 5-10 questions. Ensure the quiz covers topics from the various sources. Each question should have 4 options and one correct answer.
 
 CONTEXT:
 ---

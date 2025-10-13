@@ -1,7 +1,7 @@
-// FIX: Changed to a default import for Express (`import express from 'express'`) to resolve type errors.
+// FIX: Changed to a namespace import for Express (`import * as express from 'express'`) to resolve type errors.
 // This ensures that `express.Request` and `express.RequestHandler` are correctly typed, fixing issues
 // where properties like `headers`, `protocol`, and `get` were not found on the request object.
-import express from 'express';
+import * as express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';

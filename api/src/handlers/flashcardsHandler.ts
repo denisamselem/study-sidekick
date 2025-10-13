@@ -1,6 +1,6 @@
 
 import { RequestHandler } from 'express';
-import { queryRelevantChunks } from '../services/ragService.js';
+import { getRepresentativeChunks } from '../services/ragService.js';
 import { ai } from '../lib/gemini.js';
 import { Type } from '@google/genai';
 
@@ -24,10 +24,10 @@ export const handleFlashcards: RequestHandler = async (req, res) => {
     }
 
      try {
-        const contextChunks = await queryRelevantChunks(documentIds, "key terms, definitions, and important facts", 15);
+        const contextChunks = await getRepresentativeChunks(documentIds, 15);
         const contextText = contextChunks.map(c => c.content).join('\n\n---\n\n');
 
-        const prompt = `Based on the following document context, generate a set of 10-15 flashcards. Create a mix of question/answer and fill-in-the-blank styles.
+        const prompt = `Based on the following document context, which contains excerpts from multiple documents, generate a set of 10-15 flashcards. Ensure the flashcards cover key terms and concepts from all the different topics present in the context. Create a mix of question/answer and fill-in-the-blank styles.
 
 CONTEXT:
 ---
