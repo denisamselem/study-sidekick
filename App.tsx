@@ -6,7 +6,7 @@ import { QuizView } from './components/QuizView';
 import { FlashcardView } from './components/FlashcardView';
 import { postMessage, fetchQuiz, fetchFlashcards, getDocumentStatus, processTextDocument } from './services/apiService';
 import { Message, StudyAid, ViewType, Quiz, Flashcard } from './types';
-import { ChatIcon, QuizIcon, FlashcardIcon, LoadingSpinner, PageLoader, DocumentIcon } from './components/common/Icons';
+import { ChatIcon, QuizIcon, FlashcardIcon, LoadingSpinner, PageLoader, DocumentIcon, TrashIcon } from './components/common/Icons';
 
 // Import pdfjs-dist and set up the worker
 import * as pdfjsLib from 'https://aistudiocdn.com/pdfjs-dist@4.4.168/build/pdf.mjs';
@@ -51,15 +51,18 @@ const App: React.FC = () => {
 
     const pollingIntervalRef = useRef<number | null>(null);
 
-    const stopPolling = () => {
+    const stopPolling = useCallback(() => {
         if (pollingIntervalRef.current) {
             clearInterval(pollingIntervalRef.current);
             pollingIntervalRef.current = null;
         }
-    };
+    }, []);
     
     useEffect(() => {
         if (isProcessing && documents.length > 0) {
+            // Clear previous poller if it exists
+            stopPolling();
+
             pollingIntervalRef.current = window.setInterval(async () => {
                 try {
                     const statuses = await Promise.all(documents.map(doc => getDocumentStatus(doc.id)));
@@ -89,24 +92,19 @@ const App: React.FC = () => {
         }
 
         return () => stopPolling();
-    }, [isProcessing, documents]);
+    }, [isProcessing, documents, stopPolling]);
 
 
     const handleFilesUpload = useCallback(async (files: File[]) => {
         setIsProcessing(true);
         setError(null);
-        setChatHistory([]);
-        setStudyAid(null);
-        setCurrentView('chat');
-        setDocuments([]);
         setProcessingProgress(0);
-        setProcessingMessage(`Extracting text from ${files.length} document(s)...`);
+        setProcessingMessage(`Extracting text from ${files.length} new document(s)...`);
         
         try {
             const uploadPromises = files.map(async (file) => {
                 const text = await extractTextFromFile(file);
                 if (!text.trim()) {
-                    // We can choose to throw an error or just skip the file
                     console.warn(`Skipping empty file: ${file.name}`);
                     return null;
                 }
@@ -121,7 +119,7 @@ const App: React.FC = () => {
             }
 
             setProcessingMessage('Initializing processing...');
-            setDocuments(results); // This will trigger the polling useEffect
+            setDocuments(prevDocs => [...prevDocs, ...results]); // Append new documents
 
         } catch(err) {
             const message = err instanceof Error ? err.message : "An unknown error occurred during upload.";
@@ -129,6 +127,19 @@ const App: React.FC = () => {
             setIsProcessing(false);
         }
     }, []);
+
+    const handleClearSession = useCallback(() => {
+        stopPolling();
+        setDocuments([]);
+        setChatHistory([]);
+        setStudyAid(null);
+        setCurrentView('chat');
+        setIsProcessing(false);
+        setError(null);
+        setProcessingProgress(0);
+        setProcessingMessage('Processing Document...');
+    }, [stopPolling]);
+
 
     const handleSendMessage = useCallback(async (message: string) => {
         if (documents.length === 0) return;
@@ -228,7 +239,18 @@ const App: React.FC = () => {
                 {documents.length > 0 && (
                     <div className={`flex-grow flex flex-col space-y-4 transition-opacity ${isProcessing ? 'opacity-50' : 'opacity-100'}`}>
                         <div className="p-4 bg-slate-100 dark:bg-slate-900/50 rounded-lg">
-                           <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2">Loaded Materials:</h3>
+                           <div className="flex justify-between items-center mb-2">
+                               <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Loaded Materials:</h3>
+                                <button
+                                    onClick={handleClearSession}
+                                    className="text-slate-500 hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                    title="Start New Session"
+                                    aria-label="Start new session"
+                                    disabled={isUiDisabled}
+                                >
+                                    <TrashIcon className="w-4 h-4" />
+                                </button>
+                           </div>
                            <ul className="space-y-2">
                                 {documents.map(doc => (
                                     <li key={doc.id} className="flex items-center text-sm text-indigo-600 dark:text-indigo-400">

@@ -1,7 +1,7 @@
-// FIX: Use default import for Express to ensure consistency and avoid module resolution issues that can lead to type conflicts with global APIs.
-// This approach uses the `express` namespace to prevent name conflicts with global DOM types like `Request`.
-// FIX: Changed to a namespace import to robustly resolve Express types and avoid conflicts.
-import * as express from 'express';
+// FIX: Changed to a default import for Express (`import express from 'express'`) to resolve type errors.
+// This ensures that `express.Request` and `express.RequestHandler` are correctly typed, fixing issues
+// where properties like `headers`, `protocol`, and `get` were not found on the request object.
+import express from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';
