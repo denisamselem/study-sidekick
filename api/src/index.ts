@@ -8,6 +8,8 @@ import { handleQuiz } from './handlers/quizHandler.js';
 import { handleFlashcards } from './handlers/flashcardsHandler.js';
 import { handleConfig } from './handlers/configHandler.js';
 
+// Prefer loading api/.env.local for local development if present; fallback to default .env
+dotenv.config({ path: '.env.local' });
 dotenv.config();
 
 const app = express();
