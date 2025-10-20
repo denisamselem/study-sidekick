@@ -3,6 +3,9 @@ import { supabase } from '../lib/supabase.js';
 import { createEmbedding } from './embeddingService.js';
 import { v4 as uuidv4 } from 'uuid';
 import { chunkText } from '../lib/textChunker.js';
+import { kMeansClustering, stratifiedSample } from './clusteringService.js';
+
+type ChunkWithEmbedding = { content: string; embedding: number[] | null };
 
 /**
  * Inserts a batch of pre-embedded chunks into the database and returns the newly created chunks with their IDs.
@@ -84,31 +87,54 @@ export async function getRepresentativeChunks(documentIds: string[], chunkCount:
     if (!documentIds || documentIds.length === 0) {
         return [];
     }
-    
-    const countPerDoc = Math.max(1, Math.ceil(chunkCount / documentIds.length));
 
+    // Fetch all completed chunks with embeddings from each document
     const chunkPromises = documentIds.map(async (docId) => {
         const { data, error } = await supabase
             .from('documents')
-            .select('content')
+            .select('content, embedding')
             .eq('document_id', docId)
-            .eq('processing_status', 'COMPLETED')
-            .order('id', { ascending: true }) // Ensure we get the first chunks
-            .limit(countPerDoc);
+            .eq('processing_status', 'COMPLETED');
         
         if (error) {
-            console.error(`Error fetching representative chunks for doc ${docId}:`, error);
-            return []; // Return empty array on error for this doc
+            console.error(`Error fetching chunks for doc ${docId}:`, error);
+            return [];
         }
-        return data || [];
+        return (data as ChunkWithEmbedding[]) || [];
     });
 
     const results = await Promise.all(chunkPromises);
-    
-    // Flatten the array of arrays into a single array of chunks
-    const combinedChunks = results.flat();
+    const allChunks = results.flat();
 
-    return combinedChunks.slice(0, chunkCount);
+    if (allChunks.length === 0) {
+        return [];
+    }
+
+    // If we have few chunks, return all
+    if (allChunks.length <= chunkCount) {
+        return allChunks.map(c => ({ content: c.content }));
+    }
+
+    // Semantic clustering: use embeddings to group similar chunks
+    const embeddings = allChunks
+        .map(c => c.embedding)
+        .filter((e): e is number[] => e !== null);
+
+    if (embeddings.length === 0) {
+        // Fallback if no embeddings: return first N chunks
+        return allChunks.slice(0, chunkCount).map(c => ({ content: c.content }));
+    }
+
+    // Determine number of clusters (3-5 clusters for good diversity)
+    const k = Math.min(5, Math.max(3, Math.ceil(allChunks.length / 10)));
+
+    // Run k-means clustering
+    const clusterAssignments = kMeansClustering(embeddings, k);
+
+    // Stratified sampling: evenly sample from each cluster
+    const sampledChunks = stratifiedSample(allChunks, clusterAssignments, chunkCount, k);
+
+    return sampledChunks.map(c => ({ content: c.content }));
 }
 
 

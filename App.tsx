@@ -53,7 +53,8 @@ const App: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
 
     const pollingIntervalRef = useRef<number | null>(null);
-    const { addToast, addPersistentToast } = useToast();
+    const mainRef = useRef<HTMLDivElement>(null);
+    const { addToast, addPersistentToast, setToastContainer } = useToast();
 
     const stopPolling = useCallback(() => {
         if (pollingIntervalRef.current) {
@@ -105,6 +106,10 @@ const App: React.FC = () => {
 
         return () => stopPolling();
     }, [isProcessing, documents, stopPolling, addPersistentToast]);
+
+    useEffect(() => {
+        setToastContainer(mainRef.current);
+    }, [setToastContainer]);
 
 
     const handleFilesUpload = useCallback(async (files: File[]) => {
@@ -216,16 +221,7 @@ const App: React.FC = () => {
         }
     };
     
-    const renderProcessingOverlay = () => (
-        <div className="absolute inset-0 bg-white/80 dark:bg-slate-900/80 flex flex-col items-center justify-center z-10 text-center p-4">
-            <LoadingSpinner />
-            <h3 className="mt-4 text-lg font-semibold">{processingMessage} ({processingProgress}%)</h3>
-            <div className="w-full max-w-md bg-slate-200 dark:bg-slate-700 rounded-full h-2.5 mt-2">
-                <div className="bg-indigo-600 h-2.5 rounded-full" style={{ width: `${processingProgress}%` }}></div>
-            </div>
-            <p className="text-slate-600 dark:text-slate-400 mt-2">This may take a few moments. We're preparing your study materials...</p>
-        </div>
-    );
+    // Removed central processing overlay to avoid duplication with toasts
 
     const renderContent = (): ReactNode => {
         if (isLoading && (currentView === 'quiz' || currentView === 'flashcards')) {
@@ -324,7 +320,7 @@ const App: React.FC = () => {
                 )}
             </aside>
 
-            <main className="flex-1 p-6 bg-slate-100 dark:bg-slate-900">
+            <main ref={mainRef} className="flex-1 p-6 bg-slate-100 dark:bg-slate-900 relative">
                 {documents.length === 0 && !isProcessing && !isUploading ? (
                     <div className="flex items-center justify-center h-full bg-white dark:bg-slate-800 rounded-lg shadow-inner">
                         <div className="text-center text-slate-500 dark:text-slate-400">
@@ -333,11 +329,8 @@ const App: React.FC = () => {
                         </div>
                     </div>
                 ) : (
-                    <div className="h-full relative">
-                        {isProcessing && renderProcessingOverlay()}
-                        <div className={`${isProcessing ? 'blur-sm' : ''}`}>
-                            {renderContent()}
-                        </div>
+                    <div className="h-full">
+                        {renderContent()}
                     </div>
                 )}
             </main>
