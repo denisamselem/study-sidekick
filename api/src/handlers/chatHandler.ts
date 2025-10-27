@@ -1,26 +1,15 @@
 
 import { RequestHandler } from 'express';
-import { z } from 'zod';
 import { queryRelevantChunks } from '../services/ragService.js';
 import { ai } from '../lib/gemini.js';
 import { Message } from '../../../types.js'; 
 
-const ChatSchema = z.object({
-    documentIds: z.array(z.string().uuid()).min(1),
-    history: z.array(z.object({
-        role: z.enum(['user', 'model']),
-        text: z.string(),
-        sources: z.array(z.object({ content: z.string() })).optional(),
-    })).default([]),
-    message: z.string().min(1)
-});
-
 export const handleChat: RequestHandler = async (req, res) => {
-    const parse = ChatSchema.safeParse(req.body);
-    if (!parse.success) {
-        return res.status(400).json({ message: 'Invalid request', details: parse.error.flatten() });
+    const { documentIds, history, message } = req.body as { documentIds: string[]; history: Message[]; message: string };
+
+    if (!documentIds || !Array.isArray(documentIds) || documentIds.length === 0 || !message) {
+        return res.status(400).json({ message: 'documentIds (non-empty array) and message are required.' });
     }
-    const { documentIds, history, message } = parse.data;
     
     try {
         const contextChunks = await queryRelevantChunks(documentIds, message);

@@ -7,12 +7,10 @@ import { FlashcardView } from './components/FlashcardView';
 import { postMessage, fetchQuiz, fetchFlashcards, getDocumentStatus, processTextDocument } from './services/apiService';
 import { Message, StudyAid, ViewType, Quiz, Flashcard } from './types';
 import { ChatIcon, QuizIcon, FlashcardIcon, LoadingSpinner, PageLoader, DocumentIcon, TrashIcon } from './components/common/Icons';
-import { useToast } from './components/ToastProvider';
 
-// Use local pdfjs-dist with an ESM worker under Vite
-import * as pdfjsLib from 'pdfjs-dist';
-import pdfWorkerSrc from 'pdfjs-dist/build/pdf.worker.mjs?url';
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerSrc;
+// Import pdfjs-dist and set up the worker
+import * as pdfjsLib from 'https://aistudiocdn.com/pdfjs-dist@4.4.168/build/pdf.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://aistudiocdn.com/pdfjs-dist@4.4.168/build/pdf.worker.mjs';
 
 
 const POLLING_INTERVAL_MS = 2000;
@@ -53,8 +51,6 @@ const App: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
 
     const pollingIntervalRef = useRef<number | null>(null);
-    const mainRef = useRef<HTMLDivElement>(null);
-    const { addToast, addPersistentToast, setToastContainer } = useToast();
 
     const stopPolling = useCallback(() => {
         if (pollingIntervalRef.current) {
@@ -67,7 +63,6 @@ const App: React.FC = () => {
         if (isProcessing && documents.length > 0) {
             // Clear previous poller if it exists
             stopPolling();
-            const progressToast = addPersistentToast('Generating embeddings... 0%', 'info');
 
             pollingIntervalRef.current = window.setInterval(async () => {
                 try {
@@ -77,8 +72,7 @@ const App: React.FC = () => {
                     const allFinished = statuses.every(s => s.isFinished);
                     const anyFailed = statuses.some(s => s.hasFailed);
 
-                    const percent = Math.round(totalProgress);
-                    setProcessingProgress(percent);
+                    setProcessingProgress(Math.round(totalProgress));
                     
                     if (allFinished) {
                         stopPolling();
@@ -86,30 +80,20 @@ const App: React.FC = () => {
                         if (anyFailed) {
                            setError("Some documents failed to process. Results may be incomplete.");
                         }
-                        progressToast.update('Processing complete', 'success');
-                        window.setTimeout(() => progressToast.dismiss(), 1200);
                     } else {
                          setProcessingMessage(`Generating embeddings...`);
-                         // In-place update of progress
-                         progressToast.update(`Generating embeddings... ${percent}%`, 'info');
                     }
                 } catch (err) {
                     console.error("Polling error:", err);
                     setError("Failed to get document status. Please try reloading.");
                     setIsProcessing(false);
                     stopPolling();
-                    progressToast.update('Failed to get status', 'error');
-                    window.setTimeout(() => progressToast.dismiss(), 1500);
                 }
             }, POLLING_INTERVAL_MS);
         }
 
         return () => stopPolling();
-    }, [isProcessing, documents, stopPolling, addPersistentToast]);
-
-    useEffect(() => {
-        setToastContainer(mainRef.current);
-    }, [setToastContainer]);
+    }, [isProcessing, documents, stopPolling]);
 
 
     const handleFilesUpload = useCallback(async (files: File[]) => {
@@ -135,7 +119,6 @@ const App: React.FC = () => {
                 setDocuments(prevDocs => [...prevDocs, ...results]);
                 setProcessingMessage('Initializing processing...');
                 setIsProcessing(true); // This triggers the poller with the updated documents list
-                addToast(`Added ${results.length} document(s)`, 'success');
             } else if (files.length > 0) {
                  throw new Error("None of the selected files could be processed or they were empty.");
             }
@@ -143,7 +126,6 @@ const App: React.FC = () => {
         } catch(err) {
             const message = err instanceof Error ? err.message : "An unknown error occurred during upload.";
             setError(message);
-            addToast(message, 'error');
         } finally {
             setIsUploading(false);
         }
@@ -160,36 +142,26 @@ const App: React.FC = () => {
         setError(null);
         setProcessingProgress(0);
         setProcessingMessage('Processing Document...');
-        addToast('Session cleared', 'info');
     }, [stopPolling]);
-
-    const handleRemoveDocument = useCallback((documentId: string) => {
-        // Remove a single document from the active session
-        setDocuments(prev => prev.filter(d => d.id !== documentId));
-    }, []);
 
 
     const handleSendMessage = useCallback(async (message: string) => {
         if (documents.length === 0) return;
-        const controller = new AbortController();
+        
         const documentIds = documents.map(d => d.id);
         const userMessage: Message = { role: 'user', text: message };
         setChatHistory(prev => [...prev, userMessage]);
         setIsLoading(true);
 
-        const historySnapshot = [...chatHistory, userMessage];
-
         try {
-            const response = await postMessage(documentIds, historySnapshot, message);
+            const response = await postMessage(documentIds, chatHistory, message);
             const modelMessage: Message = { role: 'model', text: response.text, sources: response.sources };
             setChatHistory(prev => [...prev, modelMessage]);
         } catch (e) {
             const errorMessage = e instanceof Error ? e.message : 'An unknown error occurred';
             setChatHistory(prev => [...prev, {role: 'model', text: `Sorry, I encountered an error: ${errorMessage}`}]);
-            addToast(errorMessage, 'error');
         } finally {
             setIsLoading(false);
-            controller.abort();
         }
     }, [documents, chatHistory]);
 
@@ -206,22 +178,28 @@ const App: React.FC = () => {
             if (type === 'quiz') {
                 const quiz = await fetchQuiz(documentIds);
                 setStudyAid(quiz);
-                addToast('Quiz generated', 'success');
             } else {
                 const flashcards = await fetchFlashcards(documentIds);
                 setStudyAid(flashcards);
-                addToast('Flashcards generated', 'success');
             }
         } catch (e) {
             setError(`Failed to generate ${type}. Please try again.`);
             console.error(e);
-            addToast(`Failed to generate ${type}`, 'error');
         } finally {
             setIsLoading(false);
         }
     };
     
-    // Removed central processing overlay to avoid duplication with toasts
+    const renderProcessingOverlay = () => (
+        <div className="absolute inset-0 bg-white/80 dark:bg-slate-900/80 flex flex-col items-center justify-center z-10 text-center p-4">
+            <LoadingSpinner />
+            <h3 className="mt-4 text-lg font-semibold">{processingMessage} ({processingProgress}%)</h3>
+            <div className="w-full max-w-md bg-slate-200 dark:bg-slate-700 rounded-full h-2.5 mt-2">
+                <div className="bg-indigo-600 h-2.5 rounded-full" style={{ width: `${processingProgress}%` }}></div>
+            </div>
+            <p className="text-slate-600 dark:text-slate-400 mt-2">This may take a few moments. We're preparing your study materials...</p>
+        </div>
+    );
 
     const renderContent = (): ReactNode => {
         if (isLoading && (currentView === 'quiz' || currentView === 'flashcards')) {
@@ -279,20 +257,9 @@ const App: React.FC = () => {
                            </div>
                            <ul className="space-y-2">
                                 {documents.map(doc => (
-                                    <li key={doc.id} className="flex items-center justify-between text-sm text-indigo-600 dark:text-indigo-400">
-                                        <div className="flex items-center min-w-0">
-                                            <DocumentIcon className="w-4 h-4 mr-2 flex-shrink-0" />
-                                            <span className="truncate" title={doc.name}>{doc.name}</span>
-                                        </div>
-                                        <button
-                                            onClick={() => handleRemoveDocument(doc.id)}
-                                            className="ml-3 text-slate-500 hover:text-red-500 dark:text-slate-400 dark:hover:text-red-400 disabled:opacity-50"
-                                            title="Remove document"
-                                            aria-label={`Remove ${doc.name}`}
-                                            disabled={isUiDisabled}
-                                        >
-                                            <TrashIcon className="w-4 h-4" />
-                                        </button>
+                                    <li key={doc.id} className="flex items-center text-sm text-indigo-600 dark:text-indigo-400">
+                                        <DocumentIcon className="w-4 h-4 mr-2 flex-shrink-0" />
+                                        <span className="truncate" title={doc.name}>{doc.name}</span>
                                     </li>
                                 ))}
                            </ul>
@@ -320,7 +287,7 @@ const App: React.FC = () => {
                 )}
             </aside>
 
-            <main ref={mainRef} className="flex-1 p-6 bg-slate-100 dark:bg-slate-900 relative">
+            <main className="flex-1 p-6 bg-slate-100 dark:bg-slate-900">
                 {documents.length === 0 && !isProcessing && !isUploading ? (
                     <div className="flex items-center justify-center h-full bg-white dark:bg-slate-800 rounded-lg shadow-inner">
                         <div className="text-center text-slate-500 dark:text-slate-400">
@@ -329,8 +296,11 @@ const App: React.FC = () => {
                         </div>
                     </div>
                 ) : (
-                    <div className="h-full">
-                        {renderContent()}
+                    <div className="h-full relative">
+                        {isProcessing && renderProcessingOverlay()}
+                        <div className={`${isProcessing ? 'blur-sm' : ''}`}>
+                            {renderContent()}
+                        </div>
                     </div>
                 )}
             </main>

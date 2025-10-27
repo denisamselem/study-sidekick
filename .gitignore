@@ -1,18 +1,3 @@
-# Dependencies and build
-node_modules/
-dist/
-.vercel/
-.DS_Store
-
-# Root env files
-.env
-.env.*
-!.env.example
-
-# Backend env files
-api/.env
-api/.env.*
-!api/.env.example
 # Logs
 logs
 *.log

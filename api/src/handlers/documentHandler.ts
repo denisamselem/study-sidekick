@@ -1,7 +1,7 @@
 // FIX: Use named imports for Express types to ensure consistency and correct type resolution.
-import { Request, RequestHandler } from 'express';
+// FIX: Alias 'Request' to 'ExpressRequest' to avoid conflict with the global fetch API's Request type.
+import { Request as ExpressRequest, RequestHandler } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { z } from 'zod';
 import { supabase } from '../lib/supabase.js';
 import { chunkText } from '../lib/textChunker.js';
 import { insertChunks } from '../services/ragService.js';
@@ -18,7 +18,8 @@ function getWorkerHeaders(): HeadersInit {
     return headers;
 }
 
-const getBaseUrl = (req: Request): string => {
+// FIX: Use the aliased 'ExpressRequest' type to ensure the correct properties are available.
+const getBaseUrl = (req: ExpressRequest): string => {
     const baseUrlEnv = process.env.BASE_URL || process.env.VERCEL_URL;
     if (baseUrlEnv) {
         return baseUrlEnv.startsWith('http') ? baseUrlEnv : `https://${baseUrlEnv}`;
@@ -48,12 +49,9 @@ async function _processChunkEmbedding(chunkId: number, documentId: string) {
     }
 }
 
-const ProcessChunkSchema = z.object({ chunkId: z.number().int().positive(), documentId: z.string().uuid() });
-
 export const handleProcessChunk: RequestHandler = async (req, res) => {
-    const parse = ProcessChunkSchema.safeParse(req.body);
-    if (!parse.success) return res.status(400).json({ message: 'Invalid request', details: parse.error.flatten() });
-    const { chunkId, documentId } = parse.data;
+    const { chunkId, documentId } = req.body;
+    if (!chunkId || !documentId) return res.status(400).json({ message: 'chunkId and documentId required.' });
 
     const { data, error: claimError } = await supabase.from('documents').update({ processing_status: 'PROCESSING' }).eq('id', chunkId).eq('processing_status', 'PENDING').select('id');
     
@@ -74,12 +72,11 @@ export const handleProcessChunk: RequestHandler = async (req, res) => {
 /**
  * [INITIATOR] Creates the processing job and all document chunks from pre-extracted text.
  */
-const ProcessTextSchema = z.object({ text: z.string().min(1), fileName: z.string().min(1) });
-
 export const handleProcessTextDocument: RequestHandler = async (req, res) => {
-    const parse = ProcessTextSchema.safeParse(req.body);
-    if (!parse.success) return res.status(400).json({ message: 'Invalid request', details: parse.error.flatten() });
-    const { text, fileName } = parse.data;
+    const { text, fileName } = req.body;
+    if (!text || !fileName) {
+        return res.status(400).json({ message: 'Text content and fileName are required.' });
+    }
 
     const documentId = uuidv4();
     try {
@@ -118,10 +115,8 @@ export const handleProcessTextDocument: RequestHandler = async (req, res) => {
  * [CONTROLLER] Polling endpoint that reports status and triggers embedding workers.
  */
 export const handleGetDocumentStatus: RequestHandler = async (req, res) => {
-    const ParamsSchema = z.object({ documentId: z.string().uuid() });
-    const parse = ParamsSchema.safeParse(req.params);
-    if (!parse.success) return res.status(400).json({ message: 'Invalid request', details: parse.error.flatten() });
-    const { documentId } = parse.data;
+    const { documentId } = req.params;
+    if (!documentId) return res.status(400).json({ message: 'documentId is required.' });
 
     try {
         const { data: job, error: jobError } = await supabase.from('document_jobs').select('status').eq('document_id', documentId).single();
