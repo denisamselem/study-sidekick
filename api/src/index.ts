@@ -1,14 +1,11 @@
 
 import express, { Request, Response, NextFunction, RequestHandler } from 'express';
-import dotenv from 'dotenv';
 import cors from 'cors';
 import { handleProcessTextDocument, handleGetDocumentStatus, handleProcessChunk } from './handlers/documentHandler.js';
 import { handleChat } from './handlers/chatHandler.js';
 import { handleQuiz } from './handlers/quizHandler.js';
 import { handleFlashcards } from './handlers/flashcardsHandler.js';
 import { handleConfig } from './handlers/configHandler.js';
-
-dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3001;

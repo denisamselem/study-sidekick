@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts"
+    "dev": "dotenv -e .env.local -- nodemon"
   },
   "dependencies": {
     "@google/genai": "^1.24.0",
@@ -24,6 +24,9 @@
     "@types/express": "^4.17.21",
     "@types/node": "^20.14.12",
     "@types/pdf-parse": "^1.1.4",
+    "dotenv-cli": "^7.4.2",
+    "nodemon": "^3.1.4",
+    "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.5.4"
   }
